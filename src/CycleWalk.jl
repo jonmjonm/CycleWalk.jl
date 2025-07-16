@@ -42,6 +42,7 @@ export AbstractGraph,
     MultiScaleCuttableTree,
     
     LinkCutPartition,
+    AbstractTreeState,
 
     # Diagnostics
     RunDiagnostics,
@@ -106,63 +107,65 @@ export AbstractGraph,
     # cluster graph
     cluster_base_graph
 
-include("./auxilary/random_extensions.jl")
-include("./auxilary/SimpleWeightedGraphs_BugFixes.jl")
-include("./utilities/array_utils.jl")
+include("auxilary/random_extensions.jl")
+include("auxilary/SimpleWeightedGraphs_BugFixes.jl")
+include("utilities/array_utils.jl")
 
-include("./graph/multi_level_graph.jl")
-include("./graph/subgraph.jl")
-include("./graph/node_set.jl")
-include("./graph/multi_level_subgraph.jl")
+include("graph/multi_level_graph.jl")
+include("graph/subgraph.jl")
+include("graph/node_set.jl")
+include("graph/multi_level_subgraph.jl")
 
 #JCM Added. Loads in some simple neighbor list algorithms
-include("./trees/neighbor_list_tree.jl")
+include("trees/neighbor_list_tree.jl")
 
-include("./trees/tree.jl")
-include("./trees/splaytrees.jl")
-include("./trees/linkcuttrees.jl")
-include("./trees/russo_ust.jl")
+include("trees/tree.jl")
+include("trees/splaytrees.jl")
+include("trees/linkcuttrees.jl")
+include("trees/russo_ust.jl")
 
 # type defs
-include("./measure/constraints/constraint_types.jl")
-include("./measure/energy/energy_types.jl")
-include("./proposals/update.jl")
-include("./diagnostics/proposal_diagnostics_types.jl")
+include("measure/constraints/constraint_types.jl")
+include("measure/energy/energy_types.jl")
+include("proposals/update.jl")
+include("diagnostics/proposal_diagnostics_types.jl")
 
-include("./partition/multi_level_partition.jl")
-include("./partition/balance_multi_level_graph.jl")
-include("./partition/construct_multi_level_partition.jl")
-include("./partition/link_cut_partition.jl")
+include("partition/multi_level_partition.jl")
+include("partition/balance_multi_level_graph.jl")
+include("partition/construct_multi_level_partition.jl")
+include("partition/link_cut_partition.jl")
 
-include("./measure/constraints/constraints.jl")
+include("cuttable_tree/cuttable_tree.jl")
 
-include("./measure/measure.jl")
-include("./measure/energy/defaults.jl")
-include("./measure/energy/log_forest_count.jl")
-include("./measure/energy/polsby_popper.jl")
-include("./measure/energy/split_unit_count_by_node.jl")
-include("./measure/energy/performant_vra_dists.jl")
-# include("./measure/energy/mcd_ousted_population.jl")
-# include("./measure/energy/vap_frac.jl")
+include("measure/constraints/constraints.jl")
 
-include("./diagnostics/proposal_diagnostics.jl")
-include("./diagnostics/lifted_cycle_walk_diagnostics.jl")
-include("./diagnostics/delta_population.jl")
-include("./diagnostics/delta_nodes.jl")
-include("./diagnostics/cuttable_edge_pairs.jl")
-include("./diagnostics/unique_cuttable_edges.jl")
-include("./diagnostics/swappable_pop.jl")
+include("measure/measure.jl")
+include("measure/energy/defaults.jl")
+include("measure/energy/log_forest_count.jl")
+include("measure/energy/polsby_popper.jl")
+include("measure/energy/split_unit_count_by_node.jl")
+include("measure/energy/performant_vra_dists.jl")
+# include("measure/energy/mcd_ousted_population.jl")
+# include("measure/energy/vap_frac.jl")
 
-include("./observables/node_counts.jl")
-include("./observables/partisan_lean.jl")
+include("diagnostics/proposal_diagnostics.jl")
+include("diagnostics/lifted_cycle_walk_diagnostics.jl")
+include("diagnostics/delta_population.jl")
+include("diagnostics/delta_nodes.jl")
+include("diagnostics/cuttable_edge_pairs.jl")
+include("diagnostics/unique_cuttable_edges.jl")
+include("diagnostics/swappable_pop.jl")
 
-#include("./io/AtlasIO.jl")
-include("./io/writer.jl")
+include("observables/node_counts.jl")
+include("observables/partisan_lean.jl")
 
-include("./proposals/lifted_tree_cycle_walk.jl")
-include("./proposals/internal_forest_walk.jl")
-include("./chains/chain.jl")
-include("./chains/mcmc.jl")
+#include("io/AtlasIO.jl")
+include("io/writer.jl")
 
-# include("./parallel_tempering_multiprocessing.jl")
+include("proposals/lifted_tree_cycle_walk.jl")
+include("proposals/internal_forest_walk.jl")
+include("chains/chain.jl")
+include("chains/mcmc.jl")
+
+# include("parallel_tempering_multiprocessing.jl")
 end # module

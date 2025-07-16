@@ -422,4 +422,5 @@ function build_lifted_tree_cycle_walk(
     return f
 end
 
-build_cycle_walk = build_lifted_tree_cycle_walk
+const build_cycle_walk = build_lifted_tree_cycle_walk
+const build_two_tree_cycle_walk = build_lifted_tree_cycle_walk

@@ -1,4 +1,6 @@
-mutable struct LinkCutPartition <: AbstractPartition
+abstract type AbstractTreeState end
+
+mutable struct LinkCutPartition <: AbstractTreeState
     num_dists::Int64
     cross_district_edges::Dict{Tuple{Int64,Int64}, Set{SimpleWeightedEdge}}
     district_roots::Vector{Int64}
@@ -17,7 +19,7 @@ end
 """"""
 function LinkCutPartition(
     partition::MultiLevelPartition,
-    rng::AbstractRNG=PCG.PCGStateOneseq(UInt64)
+    rng::AbstractRNG
 )::LinkCutPartition
     edge_type = edgetype(partition.subgraphs[1].graphs_by_level[1][()])
     edges = Vector{edge_type}(undef, 0)
@@ -54,22 +56,6 @@ function LinkCutPartition(
     assign_district_map!(lcp)
     find_cross_district_edges!(lcp)
     return lcp
-end
-
-""""""
-function LinkCutPartition(
-    graph::MultiLevelGraph, 
-    constraints::Dict{Type{T} where T<:AbstractConstraint, AbstractConstraint},
-    num_dists::U;
-    rng::AbstractRNG=PCG.PCGStateOneseq(UInt64),
-    verbose::Bool=false
-) where U <: Int
-    partition = MultiLevelPartition(graph, constraints, num_dists; 
-                                        rng=rng);
-    if verbose
-        @show collect(keys(partition.district_to_nodes[1]))[1:min(10,end)]
-    end
-    return LinkCutPartition(partition, rng);
 end
 
 """"""
@@ -170,23 +156,37 @@ end
 
 function sum_cc(
     node::Node, 
-    partition::LinkCutPartition, 
-    field::String, 
+    graph::BaseGraph, 
+    field::Union{Nothing,String}=nothing,
     start=true
 ) 
     if start
         expose!(node)
     end
-    sum = partition.graph.node_attributes[node.vertex][field]
+    if field === nothing
+        sum = 1
+    else
+        sum = graph.node_attributes[node.vertex][field]
+    end
     for ii = 1:2
         if node.children[ii] != nothing
-            sum += sum_cc(node.children[ii], partition, field, false)
+            sum += sum_cc(node.children[ii], graph, field, false)
         end
     end
     for n in node.pathChildren
-        sum += sum_cc(n, partition, field, false)
+        sum += sum_cc(n, graph, field, false)
     end
     return sum
+end
+
+""""""
+function sum_cc(
+    node::Node, 
+    partition::LinkCutPartition, 
+    field::Union{Nothing,String}=nothing,
+    start=true
+) 
+    return sum_cc(node, partition.graph, field, start)
 end
 
 
@@ -194,7 +194,7 @@ function topological_sort!(
     cut_remainder::Dict{Int, Real}, 
     node::Union{Node, Nothing}, 
     source::Node,
-    partition::LinkCutPartition,
+    graph::BaseGraph,
     field::Union{Nothing,String},
     reversed::Bool=false,
     mass::Real=0,
@@ -207,28 +207,29 @@ function topological_sort!(
     reversed ⊻= node.reversed
     if !reversed; lc,rc = 1,2; else lc,rc=2,1 end
     remainder += topological_sort!(cut_remainder, node.children[rc], node, 
-                                   partition, field, reversed, mass)
+                                   graph, field, reversed, mass)
     for n in node.pathChildren
-        remainder += topological_sort!(cut_remainder, n, node, partition, field)
+        remainder += topological_sort!(cut_remainder, n, node, graph, field)
     end
     
     index = node.vertex
     node_val = 1 # if nothing, just count nodes
     if field !== nothing
-        node_val = partition.graph.node_attributes[index][field]
+        node_val = graph.node_attributes[index][field]
     end 
     cut_remainder[index] = remainder + node_val + mass
 
     if source != node.children[lc]
         remainder += topological_sort!(cut_remainder, node.children[lc], node,
-                                       partition, field, reversed,
+                                       graph, field, reversed,
                                        cut_remainder[index])
     end
     return remainder + node_val
 end
 
-function topological_sort(root::Node, partition::LinkCutPartition; 
-                          field::Union{Nothing,String}=partition.graph.pop_col)
+""""""
+function topological_sort(root::Node, graph::BaseGraph; 
+                          field::Union{Nothing,String}=graph.pop_col)
     cut_remainder = Dict{Int,Real}()
     evert!(root)
     if !root.reversed; lc,rc = 1,2; else lc,rc=2,1 end
@@ -239,18 +240,24 @@ function topological_sort(root::Node, partition::LinkCutPartition;
     # @assert root.pathParent === nothing
 
     total = topological_sort!(cut_remainder, root.children[rc], root, 
-                              partition, field, root.reversed)
+                              graph, field, root.reversed)
 
     for n in root.pathChildren
-        total += topological_sort!(cut_remainder, n, root, partition, field)
+        total += topological_sort!(cut_remainder, n, root, graph, field)
     end
     root_pop = 1 # if field === nothing, just count number of nodes
     if field !== nothing
-        root_pop = partition.graph.node_attributes[root.vertex][field]
+        root_pop = graph.node_attributes[root.vertex][field]
     end
     cut_remainder[root.vertex] = root_pop + total
 
     return cut_remainder
+end
+
+""""""
+function topological_sort(root::Node, tree_rep::AbstractTreeState; 
+                          field::Union{Nothing,String}=tree_rep.graph.pop_col)
+    return topological_sort(root, tree_rep.graph; field=field)
 end
 
 "
