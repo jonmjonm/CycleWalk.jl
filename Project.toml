@@ -16,6 +16,7 @@ LinkCutTreesAugmented = "c1bc6fde-6912-42fb-b8df-7f936dc5be7d"
 MetropolizedForestRecom = "f1e60ccc-08a2-41db-b5d4-22e81ab96e15"
 RandomNumbers = "e6cf234a-135c-5ec9-84dd-332b85af5143"
 SimpleWeightedGraphs = "47aef6b3-ad0c-573a-a1e2-d07658019622"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
 AtlasIO = "0.1"
@@ -30,6 +31,7 @@ LinkCutTreesAugmented = "0.1"
 MetropolizedForestRecom = "0.1"
 RandomNumbers = "1"
 SimpleWeightedGraphs = "1"
+SparseArrays = "1"
 julia = "1.10"
 
 [extras]

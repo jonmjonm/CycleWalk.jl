@@ -30,17 +30,60 @@ end
 """
     get_log_spanning_trees(node_to_dist, simple_graph, di)::Float64
 
-Low-level kernel: the log number of spanning trees of district `di`, computed on the
-subgraph of `simple_graph` induced by the nodes assigned to `di` in `node_to_dist`.
+Low-level kernel: the log number of (weighted) spanning trees of district `di`, i.e.
+of the subgraph of `simple_graph` induced by the nodes assigned to `di` in
+`node_to_dist`, via Kirchhoff's matrix-tree theorem.
+
+The grounded Laplacian of the induced subgraph (its Laplacian with the last district
+node's row/column deleted) is assembled directly into a dense matrix and its
+log-determinant taken by Cholesky — the grounded Laplacian of a connected graph is
+symmetric positive definite. This avoids materializing an `induced_subgraph`, a
+sparse Laplacian, and a dense copy of it on every call, which is the dominant
+allocator during sampling. A disconnected district has no spanning tree, so its
+(singular) grounded Laplacian yields `-Inf`.
 """
 function get_log_spanning_trees(
     node_to_dist::Vector{Int64},
     simple_graph::SimpleWeightedGraph,
     di::T
 )::Float64 where T <: Int64
-    nodes = [ii for ii = 1:length(node_to_dist) if node_to_dist[ii]==di]
-    sg, vm = induced_subgraph(simple_graph, nodes)
-    return log_nspanning(sg)
+    n = length(node_to_dist)
+    # `nodes` lists the district's vertices; `pos` maps a global vertex index to its
+    # 1-based position within the district (0 if not in it). The last district vertex
+    # is grounded (dropped), giving an (m = k-1)-dimensional cofactor.
+    nodes = Vector{Int}(undef, n)
+    pos = zeros(Int, n)
+    k = 0
+    @inbounds for ii = 1:n
+        if node_to_dist[ii] == di
+            k += 1
+            nodes[k] = ii
+            pos[ii] = k
+        end
+    end
+    m = k - 1
+    m <= 0 && return 0.0  # single-node (or empty) district has exactly one spanning tree
+
+    L = zeros(Float64, m, m)
+    weights = simple_graph.weights  # SparseMatrixCSC of edge weights
+    rows = rowvals(weights)
+    vals = nonzeros(weights)
+    @inbounds for a = 1:k
+        u = nodes[a]
+        pu = pos[u]
+        pu > m && continue  # u is the grounded vertex; its row/column is dropped
+        for idx in nzrange(weights, u)
+            v = rows[idx]
+            pv = pos[v]
+            pv == 0 && continue  # neighbor not in this district
+            w = vals[idx]
+            L[pu, pu] += w                 # weighted degree (diagonal)
+            pv <= m && (L[pu, pv] -= w)    # off-diagonal (skip grounded vertex)
+        end
+    end
+
+    fact = cholesky!(Symmetric(L); check=false)
+    return issuccess(fact) ? logdet(fact) : -Inf
 end
 
 """

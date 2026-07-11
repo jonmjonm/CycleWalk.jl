@@ -97,6 +97,18 @@ function run_annealed_importance_sampling!(
     ntasks::Int=1
 )::Vector{Float64} where T <: Real
     @assert ntasks >= 1
+
+    # The spanning-forest energy takes a log-determinant per district, which calls
+    # into (OpenBLAS) LAPACK. BLAS defaults to many threads, so with several
+    # annealing tasks each launching its own BLAS pool the machine is massively
+    # oversubscribed (observed: a multi-task run running *slower* than a single
+    # task). Annealing parallelism is already across runs, and the per-district
+    # matrices are small, so pin BLAS to one thread for the duration of a
+    # multi-task run and restore the previous setting on exit.
+    prev_blas_threads = BLAS.get_num_threads()
+    ntasks > 1 && BLAS.set_num_threads(1)
+    try
+
     base_measure = deepcopy(measure)
     modify_measure!(base_measure, 0, 1)
 
@@ -157,4 +169,8 @@ function run_annealed_importance_sampling!(
     wait(writer_task)
 
     return log_weights
+
+    finally
+        ntasks > 1 && BLAS.set_num_threads(prev_blas_threads)
+    end
 end
