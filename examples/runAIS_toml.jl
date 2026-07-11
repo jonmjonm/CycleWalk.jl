@@ -1,0 +1,147 @@
+# Run annealed importance sampling (AIS) from a TOML config.
+#
+#   julia -t 4 runAIS_toml.jl toml/param_ais_ct.toml
+#
+# A base chain samples the spanning-forest measure (all energy weights 0) and each
+# retained sample is annealed toward the target measure (the [measure] weights) while
+# its log importance weight is accumulated. Annealing runs execute on `ntasks`
+# concurrent tasks — start Julia with threads (-t). See runAIS_ct.jl for the same run
+# expressed directly in Julia, and runCycleWalk_toml.jl for the serial TOML runner.
+
+import Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+
+using RandomNumbers
+using CycleWalk
+using TOML, UnPack
+using LinearAlgebra
+
+# ---------------------------------------------------------------------------
+# parse config
+# ---------------------------------------------------------------------------
+length(ARGS) >= 1 || error("usage: julia -t N runAIS_toml.jl <config.toml>")
+params = TOML.parsefile(ARGS[1])
+
+# [plans]
+@unpack num_dists, pop_dev, pop_col, geo_units, node_data = params["plans"]
+@unpack map_directory, map_file = params["plans"]
+area_col           = get(params["plans"], "area_col", nothing)
+node_border_col    = get(params["plans"], "node_border_col", nothing)
+edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
+num_dists = Int(num_dists)
+
+# [measure] — these are the ANNEALING TARGETS; the base chain starts every weight at 0
+@unpack gamma, iso_weight = params["measure"]
+measure_scores = get(params["measure"], "measure_scores",
+                     ["get_log_spanning_forests", "get_isoperimetric_score"])
+
+# [ais]
+@unpack total_steps, base_steps_per_sample, steps_per_annealing = params["ais"]
+schedule = get(params["ais"], "schedule", "linear")
+schedule == "linear" || error("only schedule=\"linear\" is supported (got \"$schedule\")")
+total_steps           = Int(total_steps)
+base_steps_per_sample = Int(base_steps_per_sample)
+steps_per_annealing   = Int(steps_per_annealing)
+
+# [run]
+@unpack atlasNameBase, outputDirectory = params["run"]
+two_cycle_walk_frac = get(params["run"], "two_cycle_walk_frac", 0.1)
+thread_id           = Int(get(params["run"], "thread_id", 1))
+rng_seed_base       = get(params["run"], "rng_seed_base", 454190)
+ntasks              = Int(get(params["run"], "ntasks", Threads.nthreads()))
+blas_threads        = Int(get(params["run"], "blas_threads", 0))
+output_districting  = get(params["run"], "output_districting", true)
+io_mode             = get(params["run"], "io_mode", "w")
+description         = get(params["run"], "description", "")
+compress            = "compress" in keys(params["run"]) ? "."*params["run"]["compress"] : ""
+writer_stats        = get(params["run"], "writer_stats", ["get_isoperimetric_scores"])
+
+@assert 0 ≤ two_cycle_walk_frac ≤ 1
+@assert ntasks ≥ 1
+
+# AIS auto-pins BLAS to 1 thread for ntasks>1 (the per-district log-det is small and
+# each task otherwise spawns its own BLAS pool). blas_threads is an optional override.
+blas_threads > 0 && BLAS.set_num_threads(blas_threads)
+
+# ---------------------------------------------------------------------------
+# build graph / partition / proposal
+# ---------------------------------------------------------------------------
+node_data = Set(node_data)
+pctGraphPath = joinpath(map_directory..., map_file)
+graph = Graph(pctGraphPath, pop_col, geo_units[1]; inc_node_data=node_data,
+              area_col=area_col, node_border_col=node_border_col,
+              edge_perimeter_col=edge_perimeter_col)
+
+constraints = initialize_constraints()
+add_constraint!(constraints, PopulationConstraint(graph, num_dists, pop_dev))
+
+rng = PCG.PCGStateOneseq(UInt64, rng_seed_base + 15123*thread_id)
+partition = LinkCutPartition(graph, constraints, num_dists; rng=rng, verbose=true)
+
+cycle_walk    = build_two_tree_cycle_walk(constraints)
+internal_walk = build_one_tree_cycle_walk(constraints)
+proposal = [(two_cycle_walk_frac, cycle_walk),
+            (1.0 - two_cycle_walk_frac, internal_walk)]
+
+# ---------------------------------------------------------------------------
+# target measure + linear annealing schedule
+# ---------------------------------------------------------------------------
+target_weight = Dict{String, Float64}("get_log_spanning_forests" => gamma,
+                                      "get_isoperimetric_score"   => iso_weight)
+measure = Measure()
+for s in measure_scores
+    haskey(target_weight, s) ||
+        error("unsupported measure score for AIS: \"$s\" (expected one of $(keys(target_weight)))")
+    push_energy!(measure, getfield(CycleWalk, Symbol(s)), target_weight[s])
+end
+
+# ramp every energy weight linearly from 0 (base measure) to its target
+function modify_measure!(m::Measure, step::Int, total::Int)
+    frac = step / total
+    for s in measure_scores
+        fnct = getfield(CycleWalk, Symbol(s))
+        m.weights[fnct] = target_weight[s] * frac
+    end
+end
+
+# ---------------------------------------------------------------------------
+# writer (weight_type=Float64 so maps carry log importance weights)
+# ---------------------------------------------------------------------------
+atlasName  = atlasNameBase * "_thread" * string(thread_id)
+atlasName *= "_ais_2cf" * string(two_cycle_walk_frac)
+gamma      > 0 && (atlasName *= "_gamma" * string(gamma))
+iso_weight > 0 && (atlasName *= "_iso" * string(iso_weight))
+atlasName *= ".jsonl" * compress
+output_file_path = joinpath(outputDirectory..., atlasName)
+
+ad_param = Dict{String, Any}("popdev" => pop_dev,
+                             "steps per annealing" => steps_per_annealing)
+writer = Writer(measure, constraints, partition, output_file_path;
+                additional_parameters=ad_param, weight_type=Float64,
+                output_districting=output_districting,
+                io_mode=io_mode, description=description)
+for stat in writer_stats
+    push_writer!(writer, getfield(CycleWalk, Symbol(stat)))
+end
+
+# ---------------------------------------------------------------------------
+# run
+# ---------------------------------------------------------------------------
+println("running AIS on ", ntasks, " task(s); outputting here: ", output_file_path)
+log_weights = run_annealed_importance_sampling!(
+    partition, proposal, measure, modify_measure!, total_steps,
+    base_steps_per_sample, steps_per_annealing, rng;
+    writer=writer, ntasks=ntasks)
+close_writer(writer)
+
+# summarize log importance weights (stable: subtract the max before exponentiating)
+println("collected ", length(log_weights), " samples")
+if !isempty(log_weights)
+    max_lw = maximum(log_weights)
+    w = exp.(log_weights .- max_lw)
+    ess = sum(w)^2 / sum(w .^ 2)
+    println("log weights: min=", round(minimum(log_weights), digits=3),
+            " max=", round(max_lw, digits=3))
+    println("effective sample size: ", round(ess, digits=2), " of ", length(log_weights))
+end
