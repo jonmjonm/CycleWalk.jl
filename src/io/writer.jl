@@ -84,7 +84,8 @@ function Writer(
     io = smartOpen(output_file_path, io_mode)
     newAtlas(io, atlasHeader, atlasParam)
 
-    atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam)
+    atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam,
+                              Int64)
     map_output_data = Dict{String, Function}()
 
     node_map = get_node_map(partition.node_col, partition)
