@@ -1,4 +1,15 @@
 """
+    MutableFloat
+
+A mutable box holding a single `Float64` in `value`, so a running scalar (e.g. the
+accumulated log importance weight during annealing) can be updated in place through
+a closure or callback argument list.
+"""
+mutable struct MutableFloat
+    value::Float64
+end
+
+"""
     set_all!(vec, value=0)
 
 Recursively set every scalar entry of a (possibly nested) vector to `value`,

@@ -121,6 +121,7 @@ export AbstractGraph,
 
     # mcmc
     run_metropolis_hastings!,
+    run_annealed_importance_sampling!,
     
     # energies/observables
     Measure,
@@ -228,6 +229,7 @@ include("./proposals/lifted_tree_cycle_walk.jl")
 include("./proposals/internal_forest_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
+include("./chains/annealed_importance_sampling.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")
 end # module

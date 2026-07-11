@@ -1,7 +1,9 @@
 """
     run_metropolis_hastings!(partition, proposal, measure, steps, rng;
                              writer=nothing, output_freq=250,
-                             run_diagnostics=RunDiagnostics())
+                             run_diagnostics=RunDiagnostics(),
+                             prestepf=(x...)->nothing, prestepargs=(),
+                             output_initial=true)
 
 Run the Metropolis–Hastings sampler in place on `partition`. Each step draws a
 proposal (a single closure, or one sampled from a weighted mixture whose weights must
@@ -9,7 +11,10 @@ sum to 1), multiplies its proposal probability ratio by the energy ratio from
 `measure`, and accepts with that probability — applying accepted moves with
 [`update_partition!`](@ref). `steps` is a step count or an `(initial, final)` range.
 Every `output_freq` steps the current plan and any registered observables/diagnostics
-are written to `writer`.
+are written to `writer`; set `output_initial=false` to suppress the map otherwise
+written before the first step. `prestepf(step, prestepargs...)` is called before
+each proposal — annealed importance sampling uses it to anneal `measure` and
+accumulate the log importance weight.
 """
 function run_metropolis_hastings!(
     partition::LinkCutPartition,
@@ -19,17 +24,21 @@ function run_metropolis_hastings!(
     rng::AbstractRNG;
     writer::Union{Writer, Nothing}=nothing,
     output_freq::Int=250,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    prestepf::Function=(x...)->nothing,
+    prestepargs::Tuple=(),
+    output_initial::Bool=true
 ) where T <: Real
     # Want this, but need to redefine it: precompute_node_tree_counts!(partition)
     check_proposals_weights(proposal)
-    
+
     initial_step, final_step = set_step_bounds(steps)
-    if initial_step == 0 || initial_step == 1
+    if (initial_step == 0 || initial_step == 1) && output_initial
         output(partition, measure, initial_step, 0, writer)
     end
 
     for step = initial_step:final_step
+        prestepf(step, prestepargs...)
         proposal!, proposal_index = get_random_proposal(proposal, rng)
         proposal_diagnostics = get_proposal_diagnostics(run_diagnostics, 
                                                         proposal!)
