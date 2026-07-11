@@ -154,7 +154,7 @@ function run_annealed_importance_sampling!(
             run_metropolis_hastings!(partition, proposal, base_measure,
                                      base_steps_per_sample, rng)
             seed = rand(rng, UInt64)
-            put!(work_channel, (ii, deepcopy(partition), seed,
+            put!(work_channel, (ii, clone_for_annealing(partition), seed,
                                 deepcopy(run_diagnostics)))
         end
     catch e

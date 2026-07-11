@@ -40,6 +40,39 @@ mutable struct LinkCutPartition <: AbstractPartition
 end
 
 """
+    clone_for_annealing(partition)
+
+Return an independent copy of `partition` suitable for running an annealing chain on
+its own task, cloning only the state that sampling mutates. The base graph
+(`graph`), the node-id column (`node_col`), and the cached per-node populations
+(`node_pops`) are read-only for the entire run, so they are *shared* rather than
+deep-copied — on a large graph this is the bulk of a full `deepcopy(partition)`'s
+bytes (the graph alone is ~75% of them). Everything a proposal touches (the link-cut
+tree, district bookkeeping, energy caches, and node→district vectors) is copied.
+
+This is what [`run_annealed_importance_sampling!`](@ref) uses to fan samples out to
+worker tasks; it is *not* a general-purpose `deepcopy` replacement, since it assumes
+the graph is never mutated while the clone is alive.
+"""
+function clone_for_annealing(p::LinkCutPartition)
+    return LinkCutPartition(
+        p.num_dists,
+        deepcopy(p.cross_district_edges),   # Sets of edges are mutated
+        copy(p.district_roots),
+        copy(p.roots_to_district),
+        deepcopy(p.energy_data),            # per-district caches are advanced in place
+        copy(p.node_to_dist),
+        copy(p.node_to_dist_update),
+        copy(p.lct),                        # spanning forest — fast structural clone
+
+        p.node_col,                         # immutable — shared
+        p.graph,                            # read-only during sampling — shared
+        p.node_pops,                        # read-only during sampling — shared
+        p.identifier,
+    )
+end
+
+"""
     LinkCutPartition(partition::MultiLevelPartition, rng=PCG.PCGStateOneseq(UInt64))
 
 Build a `LinkCutPartition` from an existing `MultiLevelPartition` by drawing a
