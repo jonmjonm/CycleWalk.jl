@@ -24,13 +24,16 @@ end
 """
     Writer(measure, constraints, partition, output_file_path; output_districting=true,
            description="", time_stamp=string(Dates.now()), io_mode="w",
-           additional_parameters=Dict{String,Any}())
+           additional_parameters=Dict{String,Any}(), weight_type=Int64)
 
 Open `output_file_path` (`.jsonl` or `.jsonl.gz`) and write the Atlas header,
 recording the measure's energies and weights, the population bounds and constraint
 descriptions, the CycleWalk package version, and any `additional_parameters`. Creates
 the output directory if needed. Register observables with [`push_writer!`](@ref) and
-close with [`close_writer`](@ref).
+close with [`close_writer`](@ref). `weight_type` is the type of each map's sampling
+weight, recorded in the Atlas header: the default `Int64` suits ordinary MCMC runs
+(every map has weight 1); pass `Float64` when maps carry real-valued weights, as in
+[`run_annealed_importance_sampling!`](@ref).
 """
 function Writer(
     measure::Measure,
@@ -41,7 +44,8 @@ function Writer(
     description::String="",
     time_stamp=string(Dates.now()),
     io_mode::String="w",
-    additional_parameters::Dict{String, Any}=Dict{String,Any}()
+    additional_parameters::Dict{String, Any}=Dict{String,Any}(),
+    weight_type::DataType=Int64
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -80,12 +84,13 @@ function Writer(
         mkpath(dir)
     end
 
-    atlasHeader = AtlasHeader(description, time_stamp, AtlasParam, MapParam)
+    atlasHeader = AtlasHeader(description, time_stamp, AtlasParam, MapParam;
+                              weightType=weight_type)
     io = smartOpen(output_file_path, io_mode)
     newAtlas(io, atlasHeader, atlasParam)
 
     atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam,
-                              Int64)
+                              weight_type)
     map_output_data = Dict{String, Function}()
 
     node_map = get_node_map(partition.node_col, partition)
@@ -158,12 +163,15 @@ function get_node_map!(
 end
 
 """
-    output(partition, measure, step, count, writer, run_diagnostics=RunDiagnostics())
+    output(partition, measure, step, count, writer, run_diagnostics=RunDiagnostics();
+           weight=1)
 
 Write one Atlas map for the current `partition`: evaluate every registered observable
 and diagnostic into the map's parameters, attach the node→district assignment (unless
 `output_districting` is false), append the map to the Atlas, and reset the
-diagnostics. No-op if `writer === nothing`.
+diagnostics. No-op if `writer === nothing`. `weight` is recorded as the map's
+sampling weight (a [`MutableFloat`](@ref) is unboxed); its type should match the
+writer's `weight_type`.
 """
 function output(
     partition::LinkCutPartition,
@@ -171,10 +179,14 @@ function output(
     step::Integer,
     count::Int,
     writer::Union{Writer, Nothing},
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics();
+    weight::Union{Real, MutableFloat}=1
 )
     if writer == nothing
         return
+    end
+    if weight isa MutableFloat
+        weight = weight.value
     end
 
     for (desc, f) in writer.map_output_data
@@ -191,11 +203,12 @@ function output(
 ########## get_map() or something
     if !writer.output_districting
         d = Dict{Tuple{Vararg{String}}, Int}()
-        map = Map{MapParam}("step"*string(step-count), d, 1, writer.map_param)
+        map = Map{MapParam}("step"*string(step-count), d, weight,
+                            writer.map_param)
     else
-        map = Map{MapParam}("step"*string(step-count), 
-                            get_node_map!(writer, partition), 
-                            1, writer.map_param)
+        map = Map{MapParam}("step"*string(step-count),
+                            get_node_map!(writer, partition),
+                            weight, writer.map_param)
     end
 ##########
 

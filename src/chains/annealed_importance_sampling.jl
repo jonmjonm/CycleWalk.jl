@@ -40,8 +40,9 @@ then deep-copied and annealed toward the target for `steps_per_annealing` steps
 while [`track_weight_and_modify_measure!`](@ref) accumulates its log weight. The
 base chain takes `total_steps` steps in all, so `total_steps ÷
 base_steps_per_sample` annealing runs are performed. If a `writer` is supplied,
-each annealed plan is written at the end of its run (the associated importance
-weight is currently only available in the returned vector).
+each annealed plan is written at the end of its run with its log importance
+weight recorded as the map's weight — construct the writer with
+`weight_type=Float64`.
 """
 function run_annealed_importance_sampling!(
     partition::LinkCutPartition,
@@ -72,6 +73,7 @@ function run_annealed_importance_sampling!(
                                  annealing_rng; writer=writer,
                                  output_freq=steps_per_annealing,
                                  output_initial=false,
+                                 weight=log_weight,
                                  run_diagnostics=run_diagnostics,
                                  prestepf=track_weight_and_modify_measure!,
                                  prestepargs=(partition_to_anneal,

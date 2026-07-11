@@ -76,4 +76,31 @@ using Test
         # the caller's measure must come through the run unmodified
         @test measure.weights[get_log_spanning_forests] == user_weight_before
     end
+
+    @testset "writer records log weights in the Atlas output" begin
+        AIO = CycleWalk.AtlasIO
+        rng = PCG.PCGStateOneseq(UInt64, 777333)
+        partition = LinkCutPartition(ais_graph, constraints, num_dists;
+                                     rng=rng)
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, gamma)
+        mktempdir() do tmpdir
+            output_path = joinpath(tmpdir, "ais_output.jsonl.gz")
+            writer = Writer(measure, constraints, partition, output_path;
+                            weight_type=Float64)
+            push_writer!(writer, get_log_spanning_forests)
+            log_weights = run_annealed_importance_sampling!(
+                partition, proposal, measure, anneal_forest_weight!,
+                60, 20, 25, rng; writer=writer)
+            close_writer(writer)
+
+            io = AIO.smartOpen(output_path, "r")
+            atlas = AIO.openAtlas(io)
+            maps = AIO.nextMaps(atlas)
+            close(io)
+            @test atlas.weightType == Float64
+            @test length(maps) == length(log_weights) == 3
+            @test [m.weight for m in maps] ≈ log_weights
+        end
+    end
 end
