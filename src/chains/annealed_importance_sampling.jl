@@ -22,11 +22,45 @@ function track_weight_and_modify_measure!(
 end
 
 """
+    anneal_sample!(partition, proposal, base_measure, modify_measure!,
+                   steps_per_annealing, seed, run_diagnostics)
+
+Anneal one base-chain sample toward the target measure and return its log
+importance weight. `partition` is mutated in place (callers pass a deep copy of
+the base-chain state), the annealing chain runs on its own
+`PCG.PCGStateOneseq(UInt64, seed)`, and `base_measure` is deep-copied before being
+annealed, so concurrent calls share no mutable state.
+"""
+function anneal_sample!(
+    partition::LinkCutPartition,
+    proposal::Union{Function,Vector{Tuple{T, Function}}},
+    base_measure::Measure,
+    modify_measure!::Function,
+    steps_per_annealing::Int,
+    seed::UInt64,
+    run_diagnostics::RunDiagnostics
+)::Float64 where T <: Real
+    log_weight = MutableFloat(0.0)
+    annealing_measure = deepcopy(base_measure)
+    annealing_rng = PCG.PCGStateOneseq(UInt64, seed)
+    run_metropolis_hastings!(partition, proposal, annealing_measure,
+                             steps_per_annealing, annealing_rng;
+                             output_initial=false,
+                             run_diagnostics=run_diagnostics,
+                             prestepf=track_weight_and_modify_measure!,
+                             prestepargs=(partition, steps_per_annealing,
+                                          log_weight, annealing_measure,
+                                          modify_measure!))
+    return log_weight.value
+end
+
+"""
     run_annealed_importance_sampling!(partition, proposal, measure, modify_measure!,
                                       total_steps, base_steps_per_sample,
                                       steps_per_annealing, rng;
                                       writer=nothing,
-                                      run_diagnostics=RunDiagnostics())
+                                      run_diagnostics=RunDiagnostics(),
+                                      ntasks=1)
 
 Run annealed importance sampling (AIS) and return the vector of log importance
 weights, one per annealing run.
@@ -39,10 +73,15 @@ The base chain runs on `partition` under the base measure for
 then deep-copied and annealed toward the target for `steps_per_annealing` steps
 while [`track_weight_and_modify_measure!`](@ref) accumulates its log weight. The
 base chain takes `total_steps` steps in all, so `total_steps ÷
-base_steps_per_sample` annealing runs are performed. If a `writer` is supplied,
-each annealed plan is written at the end of its run with its log importance
-weight recorded as the map's weight — construct the writer with
-`weight_type=Float64`.
+base_steps_per_sample` annealing runs are performed.
+
+Annealing runs execute on `ntasks` concurrent tasks (use `julia -t N` to give
+them threads). Each run gets an independent RNG seeded from a draw made
+sequentially on the base chain's `rng`, so the log weights are reproducible and
+identical for every `ntasks`. If a `writer` is supplied — construct it with
+`weight_type=Float64` — sample `i` is written as map `"sample<i>"` with its log
+importance weight as the map's weight, and maps land on disk in sample order
+regardless of which task finishes first.
 """
 function run_annealed_importance_sampling!(
     partition::LinkCutPartition,
@@ -54,33 +93,68 @@ function run_annealed_importance_sampling!(
     steps_per_annealing::Int,
     rng::AbstractRNG;
     writer::Union{Writer, Nothing}=nothing,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    ntasks::Int=1
 )::Vector{Float64} where T <: Real
+    @assert ntasks >= 1
     base_measure = deepcopy(measure)
     modify_measure!(base_measure, 0, 1)
 
     outer_steps = div(total_steps, base_steps_per_sample)
     log_weights = Vector{Float64}(undef, outer_steps)
-    for ii = 1:outer_steps
-        run_metropolis_hastings!(partition, proposal, base_measure,
-                                 base_steps_per_sample, rng)
-        partition_to_anneal = deepcopy(partition)
-        log_weight = MutableFloat(0.0)
-        annealing_measure = deepcopy(base_measure)
-        annealing_rng = deepcopy(rng)
-        run_metropolis_hastings!(partition_to_anneal, proposal,
-                                 annealing_measure, steps_per_annealing,
-                                 annealing_rng; writer=writer,
-                                 output_freq=steps_per_annealing,
-                                 output_initial=false,
-                                 weight=log_weight,
-                                 run_diagnostics=run_diagnostics,
-                                 prestepf=track_weight_and_modify_measure!,
-                                 prestepargs=(partition_to_anneal,
-                                              steps_per_annealing, log_weight,
-                                              annealing_measure,
-                                              modify_measure!))
-        log_weights[ii] = log_weight.value
+
+    work_channel = Channel{Tuple{Int, LinkCutPartition, UInt64,
+                                 RunDiagnostics}}(ntasks)
+    map_channel = Channel{Any}(2*ntasks)
+
+    # lone consumer of map_channel: holds back out-of-order arrivals so maps
+    # reach the file in sample order
+    writer_task = Threads.@spawn begin
+        pending = Dict{Int, Any}()
+        next_map = 1
+        for (idx, out_map) in map_channel
+            pending[idx] = out_map
+            while haskey(pending, next_map)
+                addMap(writer.atlas.io, pop!(pending, next_map))
+                next_map += 1
+            end
+        end
     end
+    bind(map_channel, writer_task)
+
+    workers = [Threads.@spawn(
+        for (idx, sample, seed, diagnostics) in work_channel
+            log_weight = anneal_sample!(sample, proposal, base_measure,
+                                        modify_measure!, steps_per_annealing,
+                                        seed, diagnostics)
+            log_weights[idx] = log_weight
+            if writer !== nothing
+                out_map = build_output_map(writer, sample,
+                                           "sample"*string(idx),
+                                           log_weight, diagnostics)
+                put!(map_channel, (idx, out_map))
+            end
+        end) for _ in 1:ntasks]
+    foreach(t -> bind(work_channel, t), workers)
+
+    try
+        for ii = 1:outer_steps
+            run_metropolis_hastings!(partition, proposal, base_measure,
+                                     base_steps_per_sample, rng)
+            seed = rand(rng, UInt64)
+            put!(work_channel, (ii, deepcopy(partition), seed,
+                                deepcopy(run_diagnostics)))
+        end
+    catch e
+        # a dead worker closes work_channel (via bind) and put! throws; fall
+        # through so the waits below surface the worker's own error
+        e isa InvalidStateException || rethrow()
+    finally
+        close(work_channel)
+    end
+    foreach(wait, workers)
+    close(map_channel)
+    wait(writer_task)
+
     return log_weights
 end

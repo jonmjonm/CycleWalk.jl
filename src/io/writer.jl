@@ -163,6 +163,57 @@ function get_node_map!(
 end
 
 """
+    fill_map_param!(map_param, writer, partition, run_diagnostics)
+
+Evaluate every observable registered on `writer` and every recorded diagnostic into
+`map_param` (a `Dict{String, Any}`) for the current `partition`, and return it.
+"""
+function fill_map_param!(
+    map_param::MapParam,
+    writer::Writer,
+    partition::LinkCutPartition,
+    run_diagnostics::RunDiagnostics
+)
+    for (desc, f) in writer.map_output_data
+        map_param[desc] = f(partition)
+    end
+    for (rd_desc, proposal_diagnostics) in values(run_diagnostics)
+        for (pd_desc, proposal_diagnostic) in proposal_diagnostics
+            desc = "("*join([rd_desc, pd_desc], ",")*")"
+            map_param[desc] = proposal_diagnostic.data_vec
+        end
+    end
+    return map_param
+end
+
+"""
+    build_output_map(writer, partition, name, weight=1,
+                     run_diagnostics=RunDiagnostics())
+
+Build and return the Atlas `Map` that [`output`](@ref) would write for the current
+`partition`, named `name` and carrying the sampling weight `weight`, without
+touching the writer's file or its reusable buffers. Every container in the returned
+map is freshly allocated, so this is safe to call concurrently from several tasks
+sharing one `Writer` (each with its own `partition` and `run_diagnostics`); only
+the eventual `addMap` call must be serialized.
+"""
+function build_output_map(
+    writer::Writer,
+    partition::LinkCutPartition,
+    name::String,
+    weight::Real=1,
+    run_diagnostics::RunDiagnostics=RunDiagnostics()
+)
+    map_param = fill_map_param!(MapParam(), writer, partition, run_diagnostics)
+    if !writer.output_districting
+        districting = Dict{Tuple{Vararg{String}}, Int}()
+    else
+        districting = get_node_map(writer.node_field, partition)
+    end
+    return Map{MapParam}(name, districting, weight, map_param)
+end
+
+"""
     output(partition, measure, step, count, writer, run_diagnostics=RunDiagnostics();
            weight=1)
 
@@ -189,15 +240,7 @@ function output(
         weight = weight.value
     end
 
-    for (desc, f) in writer.map_output_data
-        writer.map_param[desc] = f(partition)
-    end
-    for (rd_desc, proposal_diagnostics) in values(run_diagnostics)
-        for (pd_desc, proposal_diagnostic) in proposal_diagnostics
-            desc = "("*join([rd_desc, pd_desc], ",")*")"
-            writer.map_param[desc] = proposal_diagnostic.data_vec
-        end
-    end
+    fill_map_param!(writer.map_param, writer, partition, run_diagnostics)
 
     # @show writer.map_param
 ########## get_map() or something

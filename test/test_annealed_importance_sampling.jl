@@ -101,6 +101,43 @@ using Test
             @test atlas.weightType == Float64
             @test length(maps) == length(log_weights) == 3
             @test [m.weight for m in maps] ≈ log_weights
+            # samples must land on disk in the order they left the base chain
+            @test [m.name for m in maps] == ["sample1", "sample2", "sample3"]
+        end
+    end
+
+    @testset "ntasks=4 reproduces ntasks=1 weights and file order" begin
+        AIO = CycleWalk.AtlasIO
+        function ais_run(ntasks::Int, output_path::String)
+            rng = PCG.PCGStateOneseq(UInt64, 246810)
+            partition = LinkCutPartition(ais_graph, constraints, num_dists;
+                                         rng=rng)
+            measure = Measure()
+            push_energy!(measure, get_log_spanning_forests, gamma)
+            writer = Writer(measure, constraints, partition, output_path;
+                            weight_type=Float64)
+            push_writer!(writer, get_log_spanning_forests)
+            log_weights = run_annealed_importance_sampling!(
+                partition, proposal, measure, anneal_forest_weight!,
+                120, 15, 20, rng; writer=writer, ntasks=ntasks)
+            close_writer(writer)
+            io = AIO.smartOpen(output_path, "r")
+            maps = AIO.nextMaps(AIO.openAtlas(io))
+            close(io)
+            return log_weights, maps
+        end
+        mktempdir() do tmpdir
+            lw_serial, maps_serial = ais_run(1, joinpath(tmpdir, "s.jsonl.gz"))
+            lw_conc, maps_conc = ais_run(4, joinpath(tmpdir, "c.jsonl.gz"))
+            @test length(lw_serial) == 8
+            # per-sample seeds are drawn on the base chain, so weights are
+            # identical no matter how many tasks anneal them
+            @test lw_conc == lw_serial
+            @test [m.name for m in maps_conc] ==
+                  ["sample"*string(i) for i = 1:8]
+            @test [m.weight for m in maps_conc] ≈ lw_serial
+            @test [m.districting for m in maps_conc] ==
+                  [m.districting for m in maps_serial]
         end
     end
 end
