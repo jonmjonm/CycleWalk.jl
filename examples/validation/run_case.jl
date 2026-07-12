@@ -171,13 +171,18 @@ output_file_path = joinpath(outdir, "$(case)_$(mode)$(tagpart)$(suffix).jsonl.gz
 record_path = hasflag("--record-path")
 path_points = parse(Int, argval("--path-points", "50"))
 
+# --no-districting drops the full node→district map from each output map (~50x smaller
+# files); the convergence analyzers only read the get_log_spanning_trees observable, so
+# this is the right default for large bisection runs (disk + flaky-NFS friendly).
+out_dist = !hasflag("--no-districting")
+
 if mode == "ais"
     writer = Writer(measure, constraints, partition, output_file_path;
                     weight_type=Float64, description="$case AIS validation",
-                    path_target_points=path_points)
+                    path_target_points=path_points, output_districting=out_dist)
 else
     writer = Writer(measure, constraints, partition, output_file_path;
-                    description="$case cycle-walk validation")
+                    description="$case cycle-walk validation", output_districting=out_dist)
 end
 push_writer!(writer, get_isoperimetric_scores)   # per-district vector into map.data
 push_writer!(writer, get_log_spanning_trees)     # per-district log spanning-tree count
