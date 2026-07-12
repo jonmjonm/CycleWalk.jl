@@ -3,6 +3,24 @@ AtlasParam=Dict{String, Any}
 MapParam=Dict{String, Any}
 
 """
+    PathRecorder(desc, kind, f)
+
+One entry of a [`Writer`](@ref)'s annealing-path recorder list (see
+[`push_path_writer!`](@ref)). During annealed importance sampling, every `path_stride`
+steps its value is appended to the sample's path buffer under key `desc`. `kind` is one
+of the built-in symbols `:log_weight` (running cumulative log importance weight),
+`:delta_log_weight` (that step's increment), `:schedule_frac` (`cur_step/total_steps`),
+or `:observable`, in which case `f(partition)` is evaluated on the intermediate
+annealing partition. Only registered recorders are ever evaluated, so recording adds no
+cost when none are registered.
+"""
+struct PathRecorder
+    desc::String
+    kind::Symbol
+    f::Union{Function, Nothing}
+end
+
+"""
     Writer
 
 Serializes accepted plans and per-step data to an
@@ -11,6 +29,9 @@ handle; `map_output_data` maps each registered observable's description to its g
 (see [`push_writer!`](@ref)); `map_param` buffers the current step's observable
 values; `output_districting` selects whether each map records the full node→district
 assignment; `node_map`/`node_field` describe how nodes are keyed in the output.
+`path_recorders`/`path_target_points` configure per-sample annealing-path recording for
+annealed importance sampling (see [`push_path_writer!`](@ref)); an empty
+`path_recorders` (the default) records nothing and adds no cost.
 """
 mutable struct Writer
     atlas::Atlas{AtlasParam}
@@ -19,6 +40,8 @@ mutable struct Writer
     output_districting::Bool
     node_map::Dict{Tuple{Vararg{String}}, Int}
     node_field::String
+    path_recorders::Vector{PathRecorder}
+    path_target_points::Int
 end
 
 """
@@ -45,7 +68,8 @@ function Writer(
     time_stamp=string(Dates.now()),
     io_mode::String="w",
     additional_parameters::Dict{String, Any}=Dict{String,Any}(),
-    weight_type::DataType=Int64
+    weight_type::DataType=Int64,
+    path_target_points::Int=50
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -95,8 +119,9 @@ function Writer(
 
     node_map = get_node_map(partition.node_col, partition)
 
-    return Writer(atlas, MapParam(), map_output_data, output_districting, 
-                  node_map, partition.node_col)#, proposal_diagnostics)
+    return Writer(atlas, MapParam(), map_output_data, output_districting,
+                  node_map, partition.node_col,
+                  PathRecorder[], path_target_points)#, proposal_diagnostics)
 end
 
 """
@@ -114,6 +139,44 @@ function push_writer!(
         desc = string(get_data)
     end
     writer.map_output_data[desc] = get_data
+end
+
+"""
+    push_path_writer!(writer, spec; desc=nothing)
+
+Register an annealing-path recorder on `writer`, the path-time analogue of
+[`push_writer!`](@ref). During [`run_annealed_importance_sampling!`](@ref) each
+registered recorder's value is sampled every `path_stride` steps (chosen so each
+annealed sample yields about `writer.path_target_points` points) and written to that
+sample's output map under `desc`, as a vector alongside the ordinary observables.
+
+`spec` is either a built-in symbol — `:log_weight` (running cumulative log importance
+weight), `:delta_log_weight` (that step's increment), or `:schedule_frac`
+(`cur_step/total_steps`) — or a partition observable `f(partition)` (e.g.
+`get_isoperimetric_score`, `get_log_spanning_forests`) evaluated on the intermediate
+annealing partition. `desc` defaults to `"path/"*string(spec)`. Recording is fully
+opt-in: with no recorders registered, annealing runs the original hook with no added
+cost; a partition-observable recorder costs one evaluation per stride only when set.
+"""
+function push_path_writer!(
+    writer::Writer,
+    spec::Symbol;
+    desc::Union{String, Nothing}=nothing
+)
+    spec in (:log_weight, :delta_log_weight, :schedule_frac) ||
+        throw(ArgumentError("unknown path recorder symbol :$spec (expected " *
+              ":log_weight, :delta_log_weight, or :schedule_frac)"))
+    d = desc === nothing ? "path/"*string(spec) : desc
+    push!(writer.path_recorders, PathRecorder(d, spec, nothing))
+end
+
+function push_path_writer!(
+    writer::Writer,
+    get_data::Function;
+    desc::Union{String, Nothing}=nothing
+)
+    d = desc === nothing ? "path/"*string(get_data) : desc
+    push!(writer.path_recorders, PathRecorder(d, :observable, get_data))
 end
 
 """
@@ -202,9 +265,11 @@ function build_output_map(
     partition::LinkCutPartition,
     name::String,
     weight::Real=1,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics();
+    extra_data::Union{Nothing, AbstractDict}=nothing
 )
     map_param = fill_map_param!(MapParam(), writer, partition, run_diagnostics)
+    extra_data !== nothing && merge!(map_param, extra_data)
     if !writer.output_districting
         districting = Dict{Tuple{Vararg{String}}, Int}()
     else

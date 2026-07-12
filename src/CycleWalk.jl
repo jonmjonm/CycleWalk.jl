@@ -119,6 +119,7 @@ export AbstractGraph,
     Writer,
     close_writer,
     push_writer!,
+    push_path_writer!,
 
     # mcmc
     run_metropolis_hastings!,

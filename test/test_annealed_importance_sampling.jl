@@ -140,4 +140,69 @@ using Test
                   [m.districting for m in maps_serial]
         end
     end
+
+    @testset "path recorders capture the annealing path" begin
+        AIO = CycleWalk.AtlasIO
+        rng = PCG.PCGStateOneseq(UInt64, 135791)
+        partition = LinkCutPartition(ais_graph, constraints, num_dists; rng=rng)
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, gamma)
+        mktempdir() do tmpdir
+            output_path = joinpath(tmpdir, "ais_path.jsonl.gz")
+            writer = Writer(measure, constraints, partition, output_path;
+                            weight_type=Float64, path_target_points=10)
+            push_writer!(writer, get_log_spanning_forests)
+            push_path_writer!(writer, :log_weight)
+            push_path_writer!(writer, :schedule_frac)
+            push_path_writer!(writer, :delta_log_weight)
+            push_path_writer!(writer, get_isoperimetric_score)
+            log_weights = run_annealed_importance_sampling!(
+                partition, proposal, measure, anneal_forest_weight!,
+                60, 20, 30, rng; writer=writer, ntasks=2)
+            close_writer(writer)
+
+            io = AIO.smartOpen(output_path, "r")
+            maps = AIO.nextMaps(AIO.openAtlas(io)); close(io)
+            @test length(maps) == length(log_weights) == 3
+            for k in ["path/log_weight", "path/schedule_frac",
+                      "path/delta_log_weight", "path/get_isoperimetric_score"]
+                @test haskey(maps[1].data, k)
+            end
+            # target_points=10 over 30 steps => stride 3 => 10 recorded points
+            @test length(maps[1].data["path/log_weight"]) == 10
+            @test Float64(maps[1].data["path/schedule_frac"][end]) ≈ 1.0
+            # the final running log-weight must equal the map's importance weight
+            for m in maps
+                p = Float64.(m.data["path/log_weight"])
+                @test p[end] ≈ m.weight
+            end
+        end
+    end
+
+    @testset "recording is opt-in: no recorders => no path data, same weights" begin
+        AIO = CycleWalk.AtlasIO
+        function ais_run(record::Bool, path::String)
+            rng = PCG.PCGStateOneseq(UInt64, 222444)
+            partition = LinkCutPartition(ais_graph, constraints, num_dists; rng=rng)
+            measure = Measure()
+            push_energy!(measure, get_log_spanning_forests, gamma)
+            writer = Writer(measure, constraints, partition, path; weight_type=Float64)
+            push_writer!(writer, get_log_spanning_forests)
+            record && push_path_writer!(writer, :log_weight)
+            lw = run_annealed_importance_sampling!(partition, proposal, measure,
+                     anneal_forest_weight!, 60, 20, 25, rng; writer=writer)
+            close_writer(writer)
+            io = AIO.smartOpen(path, "r")
+            maps = AIO.nextMaps(AIO.openAtlas(io)); close(io)
+            return lw, maps
+        end
+        mktempdir() do tmpdir
+            lw_off, maps_off = ais_run(false, joinpath(tmpdir, "off.jsonl.gz"))
+            lw_on,  maps_on  = ais_run(true,  joinpath(tmpdir, "on.jsonl.gz"))
+            # turning recording on must not change the sampled weights
+            @test lw_off ≈ lw_on
+            @test !any(k -> startswith(k, "path/"), keys(maps_off[1].data))
+            @test any(k -> startswith(k, "path/"), keys(maps_on[1].data))
+        end
+    end
 end
