@@ -1,0 +1,17 @@
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t1.000000  bins=40
+copies (3):
+  grid_cyclewalk_t1.000000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.76→22.21 | 0.2691   | 0.8453   | 0.1528   | 0.4545   | ok
+2     | 23.78→24.08 | 0.2591   | 0.6588   | 0.2159   | 0.2963   | ok
+3     | 25.34→25.57 | 0.2691   | 0.8569   | 0.1462   | 0.2329   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t1.000000 t=1 : CONVERGED

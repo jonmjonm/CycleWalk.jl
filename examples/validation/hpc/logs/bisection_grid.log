@@ -1,0 +1,166 @@
+=== bisection convergence study ===
+julia:   julia version 1.12.6  (julia)
+case=grid  copies=3  samples=300  spacing=20  steps=2
+started: Sat Jul 11 21:35:49 EDT 2026
+
+########## point 1  t=0  (gamma=0 iso=0.000000)  Sat Jul 11 21:35:49 EDT 2026 ##########
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.000000  bins=40
+copies (3):
+  grid_cyclewalk_t0.000000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.000000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.000000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 22.12→22.39 | 0.2857   | 0.8310   | 0.1495   | 0.2629   | ok
+2     | 23.96→24.31 | 0.3223   | 0.6863   | 0.1894   | 0.3498   | ok
+3     | 25.43→25.78 | 0.2492   | 0.5221   | 0.2159   | 0.3496   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.000000 t=0 : CONVERGED
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.000000  bins=40
+copies (3):
+  grid_cyclewalk_t0.000000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.000000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.000000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 22.12→22.39 | 0.2857   | 0.8310   | 0.1495   | 0.2629   | ok
+2     | 23.96→24.31 | 0.3223   | 0.6863   | 0.1894   | 0.3498   | ok
+3     | 25.43→25.78 | 0.2492   | 0.5221   | 0.2159   | 0.3496   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.000000 t=0 : CONVERGED
+  -> t=0 : CONVERGED  (11s)
+
+########## point 2  t=1  (gamma=1 iso=0.300000)  Sat Jul 11 21:36:04 EDT 2026 ##########
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t1.000000  bins=40
+copies (3):
+  grid_cyclewalk_t1.000000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.76→22.21 | 0.2691   | 0.8453   | 0.1528   | 0.4545   | ok
+2     | 23.78→24.08 | 0.2591   | 0.6588   | 0.2159   | 0.2963   | ok
+3     | 25.34→25.57 | 0.2691   | 0.8569   | 0.1462   | 0.2329   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t1.000000 t=1 : CONVERGED
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t1.000000  bins=40
+copies (3):
+  grid_cyclewalk_t1.000000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t1.000000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.76→22.21 | 0.2691   | 0.8453   | 0.1528   | 0.4545   | ok
+2     | 23.78→24.08 | 0.2591   | 0.6588   | 0.2159   | 0.2963   | ok
+3     | 25.34→25.57 | 0.2691   | 0.8569   | 0.1462   | 0.2329   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t1.000000 t=1 : CONVERGED
+  -> t=1 : CONVERGED  (12s)
+
+endpoint sanity: t=0 -> CONVERGED (expect CONVERGED),  t=1 -> CONVERGED (expect NOT)
+!! ENDPOINT SANITY FAILED
+   STRICT=0 -> continuing bisection anyway.
+
+===== bisection step 1/2 : bracket [0, 1] -> test mid=0.500000 =====
+
+########## point 3  t=0.500000  (gamma=0.500000 iso=0.150000)  Sat Jul 11 21:36:20 EDT 2026 ##########
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.500000  bins=40
+copies (3):
+  grid_cyclewalk_t0.500000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.500000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.500000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.94→22.27 | 0.2791   | 0.7780   | 0.1329   | 0.3283   | ok
+2     | 23.55→24.07 | 0.2558   | 0.8039   | 0.1927   | 0.5191   | ok
+3     | 25.26→25.64 | 0.3422   | 0.6449   | 0.1595   | 0.3844   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.500000 t=0.500000 : CONVERGED
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.500000  bins=40
+copies (3):
+  grid_cyclewalk_t0.500000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.500000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.500000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.94→22.27 | 0.2791   | 0.7780   | 0.1329   | 0.3283   | ok
+2     | 23.55→24.07 | 0.2558   | 0.8039   | 0.1927   | 0.5191   | ok
+3     | 25.26→25.64 | 0.3422   | 0.6449   | 0.1595   | 0.3844   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.500000 t=0.500000 : CONVERGED
+  -> t=0.500000 : CONVERGED  (12s)
+  new bracket: converged<=0.500000   <t*<=   not>=1
+
+===== bisection step 2/2 : bracket [0.500000, 1] -> test mid=0.750000 =====
+
+########## point 4  t=0.750000  (gamma=0.750000 iso=0.225000)  Sat Jul 11 21:36:36 EDT 2026 ##########
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.750000  bins=40
+copies (3):
+  grid_cyclewalk_t0.750000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.750000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.750000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.44→22.57 | 0.2890   | 0.8434   | 0.2658   | 1.1296   | ok
+2     | 23.35→24.39 | 0.3721   | 0.7649   | 0.3555   | 1.0370   | ok
+3     | 25.23→25.93 | 0.4053   | 0.6052   | 0.3322   | 0.7059   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.750000 t=0.750000 : CONVERGED
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+====================================================================================================
+convergence check  case=grid  tag=t0.750000  bins=40
+copies (3):
+  grid_cyclewalk_t0.750000_c1.jsonl.gz              301 samples
+  grid_cyclewalk_t0.750000_c2.jsonl.gz              301 samples
+  grid_cyclewalk_t0.750000_c3.jsonl.gz              301 samples
+rank 1 = fewest spanning trees ... rank K = most   (per-district log spanning-tree count)
+====================================================================================================
+rank  | mean spread | maxTV    | 2*noise  | maxKS    | meanΔ    | verdict
+----------------------------------------------------------------------------------------------------
+1     | 21.44→22.57 | 0.2890   | 0.8434   | 0.2658   | 1.1296   | ok
+2     | 23.35→24.39 | 0.3721   | 0.7649   | 0.3555   | 1.0370   | ok
+3     | 25.23→25.93 | 0.4053   | 0.6052   | 0.3322   | 0.7059   | ok
+----------------------------------------------------------------------------------------------------
+all ranks' max pairwise TV within the split-half noise floor
+VERDICT case=grid tag=t0.750000 t=0.750000 : CONVERGED
+  -> t=0.750000 : CONVERGED  (14s)
+  new bracket: converged<=0.750000   <t*<=   not>=1
+
+=== done: Sat Jul 11 21:36:55 EDT 2026 ===
+convergence breaks in t* in (0.750000, 1]   (gamma=t, iso=0.3*t)
+summary: validation/hpc/logs/bisection_grid_summary.tsv

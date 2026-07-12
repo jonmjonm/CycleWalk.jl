@@ -1,0 +1,26 @@
+wrote /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/path_grid_variance.svg
+wrote /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/path_grid_mean.svg
+wrote /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/path_grid_varaccum.svg
+
+=== annealing-path summary ===
+grid @0k   final Var(logw)=17.848  (σ=4.225)   ½-variance reached by schedule frac 0.75
+grid @4k   final Var(logw)=0.386  (σ=0.622)   ½-variance reached by schedule frac 0.42
+grid @16k  final Var(logw)=0.098  (σ=0.313)   ½-variance reached by schedule frac 0.44
+
+=== suggested reschedule (from grid @16k) ===
+current linear: Var=0.098  σ=0.313  ESS≈90.7%
+optimal warp:   Var=0.093  σ=0.305  ESS≈91.1%   (variance ×0.95)
+γ-fraction to target at even new-schedule points (u -> γ/target):
+  u=0.00 -> γ/target=0.000
+  u=0.10 -> γ/target=0.101
+  u=0.20 -> γ/target=0.185
+  u=0.30 -> γ/target=0.275
+  u=0.40 -> γ/target=0.371
+  u=0.50 -> γ/target=0.471
+  u=0.60 -> γ/target=0.569
+  u=0.70 -> γ/target=0.670
+  u=0.80 -> γ/target=0.772
+  u=0.90 -> γ/target=0.882
+  u=1.00 -> γ/target=1.000
+wrote /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/path_grid_reschedule.csv  (load in run_case.jl to drive a non-linear modify_measure!)
+wrote /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/path_grid_reschedule.svg

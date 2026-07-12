@@ -1,0 +1,8 @@
+  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
+(collect(keys(partition.district_to_nodes[1])))[1:min(10, end)] = Tuple{Vararg{String}}[("(3,0)",), ("(4,0)",), ("(6,2)",), ("(0,1)",), ("(4,1)",), ("(6,0)",), ("(0,2)",), ("(2,0)",), ("(3,1)",), ("(4,2)",)]
+  recording annealing path (~8 points/sample)
+case=grid mode=ais dev=false ntasks=4 steps_per_annealing=40
+  -> /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/grid_ais.jsonl.gz
+collected 30 AIS samples
+  log weights: min=41.31 max=54.95
+  effective sample size: 1.7 of 30

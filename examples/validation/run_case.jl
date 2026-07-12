@@ -112,8 +112,10 @@ n_std                 = parse(Int, argval("--std-samples",  string(n_std)))
 std_spacing           = parse(Int, argval("--std-spacing",  string(std_spacing)))
 
 twocycle_frac = cfg.twocycle_frac
-gamma         = cfg.gamma
-iso_weight    = cfg.iso_weight   # 0 => no isoperimetric energy in the target
+# --gamma / --iso override the per-case target so a caller can place the target at any
+# point on the (gamma, iso) line (e.g. the bisection convergence study, gamma=t, iso=0.3t).
+gamma         = parse(Float64, argval("--gamma", string(cfg.gamma)))
+iso_weight    = parse(Float64, argval("--iso",   string(cfg.iso_weight)))  # 0 => no isoperimetric energy in the target
 ntasks        = parse(Int, argval("--ntasks", string(Threads.nthreads())))
 # independent seeds per mode so the two runs are statistically independent
 seed = parse(UInt64, argval("--seed", string(mode == "ais" ? 0x51A5_0001 : 0x0CE1_0002)))
@@ -157,7 +159,11 @@ end
 outdir = joinpath(EXAMPLES, "output", "validation")
 mkpath(outdir)
 suffix = dev ? "_dev" : ""
-output_file_path = joinpath(outdir, "$(case)_$(mode)$(suffix).jsonl.gz")
+# --tag disambiguates outputs when many runs of the same case/mode coexist (e.g. the
+# bisection study's copies x t-points): grid_cyclewalk_<tag>.jsonl.gz
+tag = argval("--tag", "")
+tagpart = isempty(tag) ? "" : "_$(tag)"
+output_file_path = joinpath(outdir, "$(case)_$(mode)$(tagpart)$(suffix).jsonl.gz")
 
 # --record-path (AIS only) writes the per-sample annealing trajectory into each map:
 # running log-weight, schedule fraction, per-step Δlog-weight, and the iso / spanning-
@@ -174,6 +180,7 @@ else
                     description="$case cycle-walk validation")
 end
 push_writer!(writer, get_isoperimetric_scores)   # per-district vector into map.data
+push_writer!(writer, get_log_spanning_trees)     # per-district log spanning-tree count
 
 if mode == "ais" && record_path
     push_path_writer!(writer, :log_weight)
