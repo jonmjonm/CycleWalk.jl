@@ -38,7 +38,11 @@ nbins = parse(Int, argval("--bins", "40"))
 const EXAMPLES = normpath(joinpath(@__DIR__, ".."))
 suffix = dev ? "_dev" : ""
 outdir = joinpath(EXAMPLES, "output", "validation")
-ais_path = joinpath(outdir, "$(case)_ais$(suffix).jsonl.gz")
+# --smc compares the annealed-SMC atlas (run_smc.jl) instead of AIS; both use the
+# same LOG-importance-weight map convention, so the importance-arm reader is shared.
+smc = hasflag("--smc")
+imp_label = smc ? "SMC" : "AIS"
+ais_path = joinpath(outdir, "$(case)_$(smc ? "smc" : "ais")$(suffix).jsonl.gz")
 cw_path  = joinpath(outdir, "$(case)_cyclewalk$(suffix).jsonl.gz")
 
 # label-invariant key for a districting: the set of districts as node-sets, so two
@@ -126,12 +130,12 @@ K = size(ais_ranks, 1)
 
 println("="^96)
 println("case=$case  dev=$dev  bins=$nbins")
-@printf("AIS:        %d samples, ESS=%.1f\n", size(ais_ranks, 2), ess(ais_w))
+@printf("%-11s %d samples, ESS=%.1f\n", imp_label*":", size(ais_ranks, 2), ess(ais_w))
 @printf("cycle walk: %d samples\n", size(cw_ranks, 2))
 println("rank 1 = most compact district ... rank K = least compact  (score = perimeter^2 / area)")
 println("="^96)
 @printf("%-5s | %-19s | %-19s | %-8s | %-8s | %s\n",
-        "rank", "mean (AIS / CW)", "var (AIS / CW)", "TV", "noise", "verdict")
+        "rank", "mean ($imp_label / CW)", "var ($imp_label / CW)", "TV", "noise", "verdict")
 println("-"^96)
 
 function compare_ranks(ais_ranks, ais_w, cw_ranks, cw_w, K, nbins)

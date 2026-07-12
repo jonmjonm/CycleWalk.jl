@@ -124,7 +124,13 @@ export AbstractGraph,
     # mcmc
     run_metropolis_hastings!,
     run_annealed_importance_sampling!,
-    
+    run_annealed_smc!,
+    FixedSchedule,
+    AdaptiveTempering,
+    LinearPath,
+    linear_path,
+    smc_scores_and_targets,
+
     # energies/observables
     Measure,
     push_energy!,
@@ -232,6 +238,7 @@ include("./proposals/internal_forest_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
 include("./chains/annealed_importance_sampling.jl")
+include("./chains/annealed_smc.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")
 end # module
