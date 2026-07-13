@@ -1,0 +1,47 @@
+# Annealed SMC config for NC (14 districts). Run with:
+#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml
+# Any [smc]/[measure] value can be overridden on the CLI, e.g.
+#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml --particles 2048 --rejuv 3000
+# (CLI flags win over the TOML values below.)
+
+[plans]
+pop_dev = 0.02
+num_dists = 14
+node_data = ["county", "prec_id", "pop2020cen", "area", "border_length"]
+geo_units = ["prec_id"]
+pop_col = "pop2020cen"
+area_col = "area"
+node_border_col = "border_length"
+edge_perimeter_col = "length"
+map_directory = ["..", "test", "test_graphs"]   # NC_pct21.json lives in the repo's test graphs
+map_file = "NC_pct21.json"
+
+# annealing TARGET weights (t=0 base has every weight 0, ramping to these at t=1)
+[measure]
+measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
+gamma = 0.25
+iso_weight = 0.3
+
+[smc]
+schedule = "fixed"        # "fixed" (t-grid + ESS<ess_frac*N resample) or "adaptive"
+particles = 1024          # population size N (= number of base samples; amplify via collect_*)
+blocks = 100              # fixed schedule: number of t-grid blocks (0->1)
+rejuv = 1500              # MH rejuvenation steps per block (mixing budget)
+init_steps = 3000         # base-measure burn-in for population diversity at t=0
+ess_frac = 0.5            # fixed: resample when ESS < ess_frac * N
+ess_target = 0.5          # adaptive: target ESS fraction per tempering step
+# option-1 amplification: after t=1, keep sampling the TARGET and emit each particle
+# every collect_every steps -> particles * (collect_steps/collect_every) samples.
+collect_steps = 5000      # 0 = one map/particle (annealing-final state only)
+collect_every = 500       # record cadence within the post-t=1 target chains
+resample_before_collect = true  # resample to EQUAL weights at t=1 before amplifying (unweighted output)
+
+[run]
+atlasNameBase = "nc"
+outputDirectory = ["output", "validation"]
+two_cycle_walk_frac = 0.1
+writer_stats = ["get_isoperimetric_scores", "get_log_spanning_trees"]
+compress = "gz"
+seed = 1518731783                    # UInt64 base seed
+output_districting = true            # false drops per-map node->district (much smaller files)
+description = "NC annealed SMC"

@@ -67,6 +67,11 @@ n_blocks    = parse(Int,     argval("--blocks",     string(d((40, 100)))))
 rejuv_steps = parse(Int,     argval("--rejuv",      string(d((50, 200)))))
 init_steps  = parse(Int,     argval("--init-steps", string(d((500, 2000)))))
 ess_target  = parse(Float64, argval("--ess-target", string(0.5)))
+# option-1 amplification: post-t=1 target sampling (0 = one map/particle)
+collect_steps = parse(Int,   argval("--collect-steps", "0"))
+collect_every = parse(Int,   argval("--collect-every", "100"))
+# equal-weight collected samples (final resample at t=1); --no-resample-before-collect disables
+resample_before_collect = !hasflag("--no-resample-before-collect")
 
 gamma      = parse(Float64, argval("--gamma", string(cfg.gamma)))
 iso_weight = parse(Float64, argval("--iso", string(cfg.iso_weight)))
@@ -109,7 +114,9 @@ println("SMC $case/$sched_kind: N=$n_particles rejuv=$rejuv_steps init=$init_ste
 @time particles, logZ, trace =
     run_annealed_smc!(partition, proposal, measure, schedule,
                       n_particles, rejuv_steps, rng;
-                      init_steps=init_steps, writer=writer)
+                      init_steps=init_steps, collect_steps=collect_steps,
+                      collect_every=collect_every,
+                      resample_before_collect=resample_before_collect, writer=writer)
 close_writer(writer)
 
 final_ess = CycleWalk.ess_from_logw([p.logW for p in particles])

@@ -350,7 +350,8 @@ end
 # ------------------------------------------------------------------ driver
 """
     run_annealed_smc!(partition, proposal, measure, schedule, n_particles,
-                      rejuv_steps, rng; path=nothing,
+                      rejuv_steps, rng; path=nothing, init_steps=0,
+                      collect_steps=0, collect_every=100,
                       writer=nothing, run_diagnostics=RunDiagnostics())
         -> (particles, logZ, trace)
 
@@ -359,6 +360,21 @@ the sole thing distinguishing the two variants; `path` (default: `linear_path`
 from `measure`'s target weights) is the swappable path geometry. Returns the final
 (near-equally-weighted) particles, the log-normalizer estimate `logZ`, and a
 per-block trace `(t, ess, resampled)`.
+
+Post-anneal sample amplification ("option 1"): with `collect_steps > 0`, after the
+population reaches t=1 the sampler keeps applying MH moves at the TARGET measure
+(each particle is then a valid target-invariant chain) and, to `writer`, emits every
+particle's state once per `collect_every` steps — `n_particles × (collect_steps ÷
+collect_every)` maps, each carrying its particle's log importance weight. This yields
+far more than `n_particles` samples without enlarging the population (the N chains are
+independent/well-dispersed; states within one chain are autocorrelated — tune
+`collect_every`). With `collect_steps = 0` (default) the writer gets one map per
+particle (the annealing-final state), the original behavior.
+
+`resample_before_collect` (default `true`, only when `collect_steps > 0`): systematic-
+resample to EQUAL weights at t=1 before amplifying, so no heavy particle dominates its
+whole collected chain and every emitted sample is unweighted. `logZ` is finalized
+first, so this resample does not affect it. Set `false` to keep the importance weights.
 """
 function run_annealed_smc!(
     partition::LinkCutPartition,
@@ -370,6 +386,9 @@ function run_annealed_smc!(
     rng::AbstractRNG;
     path::Union{AnnealPath,Function,Nothing}=nothing,
     init_steps::Int=0,
+    collect_steps::Int=0,
+    collect_every::Int=100,
+    resample_before_collect::Bool=true,
     writer::Union{Writer,Nothing}=nothing,
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
 ) where {T<:Real}
@@ -441,19 +460,34 @@ function run_annealed_smc!(
         logZ += m + log(sum(x -> exp(x - m), logw)) - log(n_particles)
     end
 
-    # ---- writer: one map per final particle, AIS convention -----------------
-    # Each particle at t=1 is a weighted target sample; write its state with the
-    # LOG importance weight `logW` as the map weight (matches AIS, so analyze.jl's
-    # is_ais reader exponentiates it). After a final resample all logW=0 (equally
-    # weighted) — also a valid target sample. Build the writer with
-    # weight_type=Float64 and push_writer! the observables analyze.jl reads
-    # (get_isoperimetric_scores). Serial write (the driver is serial).
+    # ---- writer: final particles, optionally amplified as target-chains -----
+    # Each particle at t=1 is a target sample; write its state with the LOG
+    # importance weight `logW` as the map weight (AIS convention, so analyze.jl's
+    # is_ais reader exponentiates it; after a final resample logW=0 ⇒ equal weight).
+    # Build the writer with weight_type=Float64 + push_writer! the observables
+    # analyze.jl reads. With collect_steps>0, keep sampling at the target and emit
+    # every particle each collect_every steps (option-1 amplification). Serial write.
     if writer !== nothing
-        for i in 1:n_particles
-            out_map = build_output_map(writer, particles[i].state,
-                                       "particle" * string(i),
-                                       particles[i].logW, run_diagnostics)
-            addMap(writer.atlas.io, out_map)
+        write_particles = (suffix) -> for i in 1:n_particles
+            addMap(writer.atlas.io,
+                   build_output_map(writer, particles[i].state,
+                                    "particle" * string(i) * suffix,
+                                    particles[i].logW, run_diagnostics))
+        end
+        if collect_steps <= 0
+            write_particles("")                   # "particle<i>" — one map/particle
+        else
+            # Optionally resample to EQUAL weights before amplifying, so no heavy
+            # particle dominates its whole collected chain (logZ is already
+            # finalized above, so discard this resample's normalizer increment).
+            resample_before_collect && resample!(particles, rng)
+            configure_measure!(path, work_measure, scores, 1.0)   # target measure
+            every = max(collect_every, 1)
+            for r in 1:div(collect_steps, every)
+                # advance every chain `every` steps at the target, then record all
+                rejuvenate!(particles, work_measure, proposal, every, rejuv_diags)
+                write_particles("_s" * string(r * every))         # "particle<i>_s<step>"
+            end
         end
     end
 
