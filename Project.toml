@@ -18,7 +18,7 @@ RandomNumbers = "e6cf234a-135c-5ec9-84dd-332b85af5143"
 SimpleWeightedGraphs = "47aef6b3-ad0c-573a-a1e2-d07658019622"
 
 [compat]
-AtlasIO = "0.1"
+AtlasIO = "0.1.1"
 Combinatorics = "1"
 DataStructures = "0.19"
 Dates = "1"
