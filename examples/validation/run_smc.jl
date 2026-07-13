@@ -114,7 +114,15 @@ close_writer(writer)
 
 final_ess = CycleWalk.ess_from_logw([p.logW for p in particles])
 n_resamples = count(r -> r.resampled, trace)
-@printf("wrote %d particles | blocks=%d resamples=%d final-ESS=%.1f (%.0f%%) logZ=%.4f\n",
-        length(particles), length(trace), n_resamples, final_ess,
+min_ess = minimum(r.ess for r in trace)
+# per-block ESS trace (the CT/NC health signal — where plain AIS collapsed to ~0.1%)
+println(" block   t        ESS%   resampled")
+for (b, r) in enumerate(trace)
+    @printf("  %3d   %.4f   %5.1f%%   %s\n",
+            b, r.t, 100*r.ess/n_particles, r.resampled ? "yes" : "")
+end
+@printf("wrote %d particles | blocks=%d resamples=%d min-block-ESS=%.1f (%.0f%%) final-ESS=%.1f (%.0f%%) logZ=%.4f\n",
+        length(particles), length(trace), n_resamples,
+        min_ess, 100*min_ess/n_particles, final_ess,
         100*final_ess/n_particles, logZ)
 println("analyze:  julia analyze.jl --case $case --smc", dev ? " --dev" : "")
