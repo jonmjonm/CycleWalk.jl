@@ -1,9 +1,9 @@
 # Example script to run CycleWalk with parameters from a TOML file
 #
-# julia runCycleWalk_toml.jl toml/param_ct.toml
-# julia runCycleWalk_toml.jl toml/param_grid10x10.toml
-# julia runCycleWalk_toml.jl toml/param_hex10x10.toml
-# julia runCycleWalk_toml.jl toml/param_grid4x4.toml --thread_id 200 --two_cycle_walk_frac .1 --cycle_walk_steps 1e4
+# julia run_cyclewalk_toml.jl toml/param_ct.toml
+# julia run_cyclewalk_toml.jl toml/param_grid10x10.toml
+# julia run_cyclewalk_toml.jl toml/param_hex10x10.toml
+# julia run_cyclewalk_toml.jl toml/param_grid4x4.toml --thread_id 200 --two_cycle_walk_frac .1 --cycle_walk_steps 1e4
 
 import Pkg
 Pkg.activate(".")

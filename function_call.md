@@ -6,7 +6,7 @@ play in a typical run (build a graph → build a partition → define constraint
 a target measure → run the MCMC sampler → write an Atlas of samples).
 
 A complete, runnable example using most of this surface lives in
-[`examples/runCycleWalk_ct.jl`](./examples/runCycleWalk_ct.jl). See the
+[`examples/run_cyclewalk_ct.jl`](./examples/run_cyclewalk_ct.jl). See the
 [README](./README.md) for installation and higher-level documentation.
 
 Conventions used below:

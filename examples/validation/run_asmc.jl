@@ -3,8 +3,8 @@
 # particles (each map's weight = its LOG importance weight, AIS convention) so
 # analyze.jl --smc can compare its marginals to the cycle walk.
 #
-#   julia -t 4 run_smc.jl --case grid --schedule fixed    [--dev]
-#   julia -t 4 run_smc.jl --case grid --schedule adaptive [--dev]
+#   julia -t 4 run_asmc.jl --case grid --schedule fixed    [--dev]
+#   julia -t 4 run_asmc.jl --case grid --schedule adaptive [--dev]
 #
 # Mirrors run_case.jl's graph/partition/proposal/measure setup exactly.
 

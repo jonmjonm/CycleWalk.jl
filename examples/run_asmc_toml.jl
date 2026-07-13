@@ -1,15 +1,15 @@
 # Run annealed SMC from a TOML config, with CLI-flag overrides (flags win over TOML).
 #
-#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml
-#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml --particles 2048 --rejuv 3000 \
+#   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml
+#   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml --particles 2048 --rejuv 3000 \
 #                               --collect-steps 8000 --collect-every 500
 #
 # A population of `particles` is annealed from the base measure (all weights 0) to the
 # [measure] target along `blocks` t-steps, resampling when ESS drops and rejuvenating
 # `rejuv` MH steps per block. With collect_steps>0, after t=1 the sampler keeps sampling
 # the target and emits each particle every collect_every steps (option-1 amplification:
-# particles * collect_steps/collect_every samples). See run_smc.jl for the CLI-only
-# variant and runAIS_toml.jl for the AIS TOML runner this mirrors.
+# particles * collect_steps/collect_every samples). See run_asmc.jl for the CLI-only
+# variant and run_ais_toml.jl for the AIS TOML runner this mirrors.
 
 import Pkg
 Pkg.activate(normpath(joinpath(@__DIR__)))

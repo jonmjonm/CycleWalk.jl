@@ -129,7 +129,7 @@ export AbstractGraph,
     AdaptiveTempering,
     LinearPath,
     linear_path,
-    smc_scores_and_targets,
+    annealed_smc_scores_and_targets,
 
     # energies/observables
     Measure,

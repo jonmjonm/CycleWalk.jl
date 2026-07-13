@@ -1,5 +1,5 @@
-# Small grid SMC config for smoke-testing run_smc_toml.jl (10x10 grid, 3 districts).
-#   julia -t 2 run_smc_toml.jl toml/param_smc_grid.toml
+# Small grid SMC config for smoke-testing run_asmc_toml.jl (10x10 grid, 3 districts).
+#   julia -t 2 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
 [plans]
 pop_dev = 0.02
 num_dists = 3

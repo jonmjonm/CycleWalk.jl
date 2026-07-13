@@ -1,7 +1,7 @@
 # Annealed SMC config for NC (14 districts). Run with:
-#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml
+#   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml
 # Any [smc]/[measure] value can be overridden on the CLI, e.g.
-#   julia -t 48 run_smc_toml.jl toml/param_smc_nc.toml --particles 2048 --rejuv 3000
+#   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml --particles 2048 --rejuv 3000
 # (CLI flags win over the TOML values below.)
 
 [plans]

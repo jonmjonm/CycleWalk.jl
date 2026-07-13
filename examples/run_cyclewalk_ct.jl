@@ -1,5 +1,5 @@
 ## Run:
-# julia runCycleWalk_ct.jl
+# julia run_cyclewalk_ct.jl
 
 ## Activate the CycleWalk environment  and load necessary packages
 import Pkg

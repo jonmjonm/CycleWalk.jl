@@ -1,5 +1,5 @@
 ## Run:
-# julia -t 4 runAIS_ct.jl
+# julia -t 4 run_ais_ct.jl
 #
 # Annealed importance sampling (AIS): a base chain samples the spanning-forest
 # measure (gamma = 0), and each retained sample is annealed toward the target

@@ -9,15 +9,15 @@ using Test
 # helpers are reached through the CycleWalk namespace.
 
 @testset verbose = true "annealed_smc" begin
-    smc_testdir = dirname(@__FILE__)
-    smc_json = joinpath(smc_testdir, "test_graphs", "4x4pct_2x2cnty.json")
-    smc_node_data = Set(["county", "pct", "pop", "area", "border_length"])
-    smc_base_graph = BaseGraph(smc_json, "pop",
-                               inc_node_data=smc_node_data,
+    annealed_smc_testdir = dirname(@__FILE__)
+    annealed_smc_json = joinpath(annealed_smc_testdir, "test_graphs", "4x4pct_2x2cnty.json")
+    annealed_smc_node_data = Set(["county", "pct", "pop", "area", "border_length"])
+    annealed_smc_base_graph = BaseGraph(annealed_smc_json, "pop",
+                               inc_node_data=annealed_smc_node_data,
                                area_col="area",
                                node_border_col="border_length",
                                edge_perimeter_col="length")
-    smc_graph = MultiLevelGraph(smc_base_graph, ["pct"])
+    annealed_smc_graph = MultiLevelGraph(annealed_smc_base_graph, ["pct"])
 
     num_dists = 4
     pop_dev = 0.1
@@ -26,7 +26,7 @@ using Test
 
     constraints = initialize_constraints()
     add_constraint!(constraints,
-                    PopulationConstraint(smc_graph, num_dists, pop_dev))
+                    PopulationConstraint(annealed_smc_graph, num_dists, pop_dev))
 
     cycle_walk = build_lifted_tree_cycle_walk(constraints)
     internal_walk = build_internal_forest_walk(constraints)
@@ -40,7 +40,7 @@ using Test
         m
     end
     fresh_partition(seed) =
-        LinkCutPartition(smc_graph, constraints, num_dists;
+        LinkCutPartition(annealed_smc_graph, constraints, num_dists;
                          rng=PCG.PCGStateOneseq(UInt64, seed))
 
     # ---------------------------------------------------------------- primitives
@@ -128,9 +128,9 @@ using Test
         @test [p.logW for p in parts] ≈ expected
     end
 
-    @testset "smc_scores_and_targets round-trips a measure" begin
+    @testset "annealed_smc_scores_and_targets round-trips a measure" begin
         m = make_measure()
-        scores, target_w = smc_scores_and_targets(m)
+        scores, target_w = annealed_smc_scores_and_targets(m)
         @test length(scores) == 2
         @test Set(scores) == m.scores
         # target weights are aligned to `scores` order
@@ -235,7 +235,7 @@ using Test
     end
 
     @testset "reproducibility: same seed => identical logZ and weights" begin
-        function smc_run()
+        function annealed_smc_run()
             partition = fresh_partition(909)
             measure = make_measure()
             rng = PCG.PCGStateOneseq(UInt64, 909)
@@ -244,8 +244,8 @@ using Test
                 partition, proposal, measure, sched, 8, 5, rng; init_steps=5)
             return logZ, [p.logW for p in particles]
         end
-        logZ1, w1 = smc_run()
-        logZ2, w2 = smc_run()
+        logZ1, w1 = annealed_smc_run()
+        logZ2, w2 = annealed_smc_run()
         @test logZ1 == logZ2
         @test w1 == w2
     end
@@ -258,7 +258,7 @@ using Test
         sched = FixedSchedule(range(0.0, 1.0; length=6); ess_frac=0.5)
         n_particles = 8
         mktempdir() do tmpdir
-            output_path = joinpath(tmpdir, "smc_output.jsonl.gz")
+            output_path = joinpath(tmpdir, "annealed_smc_output.jsonl.gz")
             writer = Writer(measure, constraints, partition, output_path;
                             weight_type=Float64)
             push_writer!(writer, get_isoperimetric_score)

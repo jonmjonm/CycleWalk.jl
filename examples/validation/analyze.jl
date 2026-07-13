@@ -38,7 +38,7 @@ nbins = parse(Int, argval("--bins", "40"))
 const EXAMPLES = normpath(joinpath(@__DIR__, ".."))
 suffix = dev ? "_dev" : ""
 outdir = joinpath(EXAMPLES, "output", "validation")
-# --smc compares the annealed-SMC atlas (run_smc.jl) instead of AIS; both use the
+# --smc compares the annealed-SMC atlas (run_asmc.jl) instead of AIS; both use the
 # same LOG-importance-weight map convention, so the importance-arm reader is shared.
 smc = hasflag("--smc")
 imp_label = smc ? "SMC" : "AIS"

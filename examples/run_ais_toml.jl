@@ -1,12 +1,12 @@
 # Run annealed importance sampling (AIS) from a TOML config.
 #
-#   julia -t 4 runAIS_toml.jl toml/param_ais_ct.toml
+#   julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
 #
 # A base chain samples the spanning-forest measure (all energy weights 0) and each
 # retained sample is annealed toward the target measure (the [measure] weights) while
 # its log importance weight is accumulated. Annealing runs execute on `ntasks`
-# concurrent tasks — start Julia with threads (-t). See runAIS_ct.jl for the same run
-# expressed directly in Julia, and runCycleWalk_toml.jl for the serial TOML runner.
+# concurrent tasks — start Julia with threads (-t). See run_ais_ct.jl for the same run
+# expressed directly in Julia, and run_cyclewalk_toml.jl for the serial TOML runner.
 
 import Pkg
 Pkg.activate(".")
@@ -20,7 +20,7 @@ using LinearAlgebra
 # ---------------------------------------------------------------------------
 # parse config
 # ---------------------------------------------------------------------------
-length(ARGS) >= 1 || error("usage: julia -t N runAIS_toml.jl <config.toml>")
+length(ARGS) >= 1 || error("usage: julia -t N run_ais_toml.jl <config.toml>")
 params = TOML.parsefile(ARGS[1])
 
 # [plans]

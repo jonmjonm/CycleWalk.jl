@@ -7,7 +7,7 @@
 #                         every step (coupled)
 # The strong cross-check: both estimate the SAME logZ, so their logZ should agree.
 #
-#   julia -t 4 examples/validation/smoke_smc.jl
+#   julia -t 4 examples/validation/smoke_annealed_smc.jl
 
 import Pkg
 Pkg.activate(normpath(joinpath(@__DIR__, "..")))

@@ -21,8 +21,8 @@ Two schedules are available and differ only in how each next temperature is chos
 Validation reuses the AIS study's method exactly: each plan's per-district isoperimetric
 scores are sorted (rank 1 = most compact … rank K = least compact), and each rank's
 SMC-vs-cycle-walk total-variation distance is judged against the **split-half noise
-floor** (see `RESULTS.md` for the methodology). Runners: `examples/run_smc_toml.jl`
-(TOML config + CLI overrides) and `examples/validation/run_smc.jl`; comparison via
+floor** (see `RESULTS.md` for the methodology). Runners: `examples/run_asmc_toml.jl`
+(TOML config + CLI overrides) and `examples/validation/run_asmc.jl`; comparison via
 `analyze.jl --case <c> --smc` against the same `<case>_cyclewalk` baseline.
 
 ## Headline: SMC removes the weight collapse that sank AIS
@@ -84,7 +84,7 @@ the particles to track the moving distribution.
 ## Reproduce / artifacts
 
 ```
-julia -t <threads> run_smc_toml.jl toml/param_smc_nc.toml --rejuv 3000
+julia -t <threads> run_asmc_toml.jl toml/param_annealed_smc_nc.toml --rejuv 3000
 julia --project=examples validation/analyze.jl --case nc --smc
 ```
 

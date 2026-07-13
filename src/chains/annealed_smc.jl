@@ -154,7 +154,7 @@ LinearPath{K}(f::F) where {K,F} = LinearPath{K,F}(f)
 
 The diagonal path `t ↦ t .* target_w`, reproducing the linear γ+iso schedule
 `modify_measure!` used. `target_w` is the target measure's per-term weights, in
-`scores` order (see `smc_scores_and_targets`). Swap for a staged-L / nonzero-base /
+`scores` order (see `annealed_smc_scores_and_targets`). Swap for a staged-L / nonzero-base /
 fitted path: any `t ↦ NTuple{K}` starting at base weights (t=0), ending at
 `target_w` (t=1) — still a `LinearPath`.
 """
@@ -199,13 +199,13 @@ function configure_measure!(path::LinearPath, m::Measure,
 end
 
 """
-    smc_scores_and_targets(measure) -> (scores::NTuple{K,Function}, target_w::NTuple{K,Float64})
+    annealed_smc_scores_and_targets(measure) -> (scores::NTuple{K,Function}, target_w::NTuple{K,Float64})
 
 Freeze the target `measure` into an ordered tuple of energy functions and their
 target weights. `scores` order is the single source of truth aligning each
 particle's `phi`, `path(t)`, and the rejuvenation measure.
 """
-function smc_scores_and_targets(measure::Measure)
+function annealed_smc_scores_and_targets(measure::Measure)
     scores = Tuple(measure.scores)
     target_w = map(e -> Float64(measure.weights[e]), scores)
     return scores, target_w
@@ -393,7 +393,7 @@ function run_annealed_smc!(
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
 ) where {T<:Real}
 
-    scores, target_w = smc_scores_and_targets(measure)
+    scores, target_w = annealed_smc_scores_and_targets(measure)
     K = length(scores)
     path === nothing && (path = linear_path(target_w))
     path isa Function && (path = LinearPath{K}(path))   # bare t↦NTuple ⇒ linear
