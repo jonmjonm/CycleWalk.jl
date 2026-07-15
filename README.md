@@ -29,7 +29,7 @@ The Metropolized Cycle Walk algorithm uses these walks as proposals to a Metropo
 
 More details on the algorithm can be found in the [Cycle Walk paper](https://arxiv.org/abs/2509.08629).
 
-## Instillation
+## Installation
 
 The latest released version of the `CycleWalk.jl` package can be installed from within Julia by 
 
@@ -51,23 +51,48 @@ The `examples` directory contains example scripts that demonstrate how to use th
 
 ### Basic Usage
 
-The script [`examples/runCycleWalk_ct.jl`](./examples/runCycleWalk_ct.jl) gives a simple example of how to run the Metropolized Cycle Walk algorithm. It creates an ensemble of congressional redistricting plans for Connecticut using the Cycle Walk algorithm with a target measure that includes a spanning forest energy and an isoperimetric score energy.
+The script [`examples/run_cyclewalk_ct.jl`](./examples/run_cyclewalk_ct.jl) gives a simple example of how to run the Metropolized Cycle Walk algorithm. It creates an ensemble of congressional redistricting plans for Connecticut using the Cycle Walk algorithm with a target measure that includes a spanning forest energy and an isoperimetric score energy.
 
 ### A general run script with configuration file
 
-The script [`examples/runCycleWalk_toml.jl`](./examples/runCycleWalk_toml.jl) demonstrates how to run the Cycle Walk algorithm with parameters specified in a TOML configuration file. This allows for easy customization of the algorithm's parameters without modifying the script itself.
+The script [`examples/run_cyclewalk_toml.jl`](./examples/run_cyclewalk_toml.jl) demonstrates how to run the Cycle Walk algorithm with parameters specified in a TOML configuration file. This allows for easy customization of the algorithm's parameters without modifying the script itself.
 
 There are a number of example TOML files in the `examples/toml` directory that can be used to run the script. 
 
 The following command samples congressional redistricting plans for Connecticut using the Cycle Walk algorithm from the target measure specified in the `toml/param_ct.toml` file.
 ```
-julia runCycleWalk_toml.jl toml/param_ct.toml
+julia run_cyclewalk_toml.jl toml/param_ct.toml
 ```
 There are also example TOML files for grid and hexagonal districts in the `examples/toml` directory. For example, the following command samples redistricting plans for a 10x10 grid of districts using the Cycle Walk algorithm from the target measure specified in the `examples/toml/param_grid10x10.toml` file. It is run with the following command:
 ```
-julia runCycleWalk_toml.jl toml/param_grid10x10.toml
+julia run_cyclewalk_toml.jl toml/param_grid10x10.toml
 ```
 One must be in the `examples` directory to run both of these commands.
+
+### Annealed Importance Sampling (AIS)
+
+Annealed importance sampling is an alternative to the standard Metropolized Cycle Walk:
+a base chain samples the spanning-forest measure, and each retained sample is annealed
+toward the target measure while its log importance weight is accumulated, rather than
+being sampled from the target measure directly by the Metropolis-Hastings walk.
+
+The script [`examples/run_ais_ct.jl`](./examples/run_ais_ct.jl) gives a direct example of
+running AIS for Connecticut. [`examples/run_ais_toml.jl`](./examples/run_ais_toml.jl) runs
+AIS from a TOML configuration file (see `examples/toml/param_ais_ct.toml`):
+```
+julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
+```
+
+### Annealed Sequential Monte Carlo (SMC)
+
+The script [`examples/run_asmc_toml.jl`](./examples/run_asmc_toml.jl) runs an annealed
+SMC sampler — a population of particles is jointly tempered toward the target measure,
+resampling and rejuvenating as needed — from a TOML configuration file. Both a fixed
+temperature schedule and an adaptive schedule (`FixedSchedule` / `AdaptiveTempering`) are
+supported; see `examples/toml/param_annealed_smc_grid.toml` for an example configuration.
+```
+julia -t 4 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
+```
 
 
 

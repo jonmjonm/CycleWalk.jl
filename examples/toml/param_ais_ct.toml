@@ -1,0 +1,42 @@
+[plans]
+pop_dev = 0.02
+num_dists = 5
+node_data=["COUNTY", "NAME", "POP20", "area", "border_length"]
+geo_units=["NAME"]
+pop_col="POP20"
+area_col="area"
+node_border_col="border_length"
+edge_perimeter_col="length"
+map_directory=["data","ct"]
+map_file="CT_pct20.json"
+
+# annealing endpoints. gamma/iso_weight are the TARGETS (t=1); gamma_start/iso_start
+# are the BASE measure the base chain samples (t=0, default 0). Default base 0/0 ramps
+# every weight up from the spanning-forest measure; set them to anneal between two
+# nonzero parameter sets (the base chain must be able to mix under the base measure).
+[measure]
+measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
+gamma=1.0
+iso_weight=0.3
+# gamma_start=0.0
+# iso_start=0.0
+
+[ais]
+total_steps=1.0e4            # total base-chain steps
+base_steps_per_sample=500    # base-chain steps between annealed samples
+steps_per_annealing=2000     # annealing steps per sample
+schedule="linear"           # only "linear" is supported
+
+[run]
+thread_id = 1
+atlasNameBase="ct"
+outputDirectory=["output","ct"]
+two_cycle_walk_frac=0.1
+writer_stats=["get_isoperimetric_scores"]
+compress="gz"
+# performance / output knobs
+ntasks=4                    # concurrent annealing tasks (start julia with -t >= ntasks)
+blas_threads=0              # 0 = AIS auto-pins BLAS to 1; set >0 to override
+output_districting=true     # false drops per-map node->district (much smaller files)
+io_mode="w"
+description="CT annealed importance sampling example"

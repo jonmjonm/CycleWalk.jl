@@ -1,0 +1,42 @@
+# Small grid SMC config for smoke-testing run_asmc_toml.jl (10x10 grid, 3 districts).
+#   julia -t 2 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
+[plans]
+pop_dev = 0.02
+num_dists = 3
+node_data = ["node_name", "population", "area", "border_length", "county"]
+geo_units = ["node_name"]
+pop_col = "population"
+area_col = "area"
+node_border_col = "border_length"
+edge_perimeter_col = "length"
+map_directory = ["data", "grid"]
+map_file = "grid_graph_10_by_10.json"
+
+[measure]
+measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
+gamma = 0.25          # target weights at t=1
+iso_weight = 0.3
+# gamma_start / iso_start: base weights at t=0 (default 0). Set them, or pass
+# --gamma-start/--iso-start, to anneal between two nonzero parameter sets.
+# gamma_start = 0.0
+# iso_start = 0.0
+
+[smc]
+schedule = "fixed"
+particles = 16
+blocks = 10
+rejuv = 20
+init_steps = 50
+ess_frac = 0.5
+collect_steps = 100
+collect_every = 50
+resample_before_collect = true
+
+[run]
+atlasNameBase = "gridtest"
+outputDirectory = ["output", "validation"]
+two_cycle_walk_frac = 0.1
+writer_stats = ["get_isoperimetric_scores", "get_log_spanning_trees"]
+compress = "gz"
+seed = 87654321
+description = "grid SMC smoke"

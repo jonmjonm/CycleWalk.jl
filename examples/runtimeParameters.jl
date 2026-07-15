@@ -45,13 +45,20 @@ writer_stats =  "writer_stats" in  keys(params["plans"]) ? params["plans"]["writ
 area_col= "area_col" in keys(params["plans"]) ? params["plans"]["area_col"] : nothing 
 node_border_col= "node_border_col" in keys(params["plans"]) ? params["plans"]["node_border_col"] : nothing 
 edge_perimeter_col= "edge_perimeter_col" in keys(params["plans"]) ? params["plans"]["edge_perimeter_col"] : nothing 
-compress= "compress" in keys(params["run"]) ? "."*params["run"]["compress"] : "" 
+compress= "compress" in keys(params["run"]) ? "."*params["run"]["compress"] : ""
+
+# optional output / run settings (backward compatible: absent keys take defaults)
+output_districting = get(params["run"], "output_districting", true) # write per-map node→district
+io_mode            = get(params["run"], "io_mode", "w")             # "w" (truncate) or "a" (append)
+description        = get(params["run"], "description", "")          # recorded in the Atlas header
+rng_seed_base      = get(params["run"], "rng_seed_base", 454190)    # base RNG seed (see rng_seed below)
+blas_threads       = Int(get(params["run"], "blas_threads", 0))     # 0 = leave BLAS default; else pin
 
 node_data=Set(node_data) # change from vector to Set
 @assert 0 ≤ two_cycle_walk_frac ≤ 1
 
 
-rng_seed = 454190 + 15123*thread_id
+rng_seed = rng_seed_base + 15123*thread_id
 #set number of total steps needed to have correct expected number of cycle_wak_steps
 steps = Int(ceil(cycle_walk_steps/two_cycle_walk_frac))  
 outfreq = Int(floor(cycle_walk_out_freq/two_cycle_walk_frac))
@@ -68,6 +75,7 @@ if gamma > 0; atlasName *="_gamma"*string(gamma) end
 if iso_weight > 0; atlasName *="_iso"*string(iso_weight) end
 atlasName *= ".jsonl"*compress
 output_file_path = joinpath(outputDirectory... , atlasName)
+mkpath(dirname(output_file_path))
 
 @show thread_id
 @show steps, outfreq
@@ -77,4 +85,5 @@ output_file_path = joinpath(outputDirectory... , atlasName)
 @show node_data
 
 pctGraphPath = joinpath(map_directory... , map_file)
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 @show pctGraphPath

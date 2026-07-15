@@ -1,9 +1,9 @@
 # Example script to run CycleWalk with parameters from a TOML file
 #
-# julia runCycleWalk_toml.jl toml/param_ct.toml
-# julia runCycleWalk_toml.jl toml/param_grid10x10.toml
-# julia runCycleWalk_toml.jl toml/param_hex10x10.toml
-# julia runCycleWalk_toml.jl toml/param_grid4x4.toml --thread_id 200 --two_cycle_walk_frac .1 --cycle_walk_steps 1e4
+# julia run_cyclewalk_toml.jl toml/param_ct.toml
+# julia run_cyclewalk_toml.jl toml/param_grid10x10.toml
+# julia run_cyclewalk_toml.jl toml/param_hex10x10.toml
+# julia run_cyclewalk_toml.jl toml/param_grid4x4.toml --thread_id 200 --two_cycle_walk_frac .1 --cycle_walk_steps 1e4
 
 import Pkg
 Pkg.activate(".")
@@ -11,10 +11,15 @@ Pkg.instantiate()
 
 using RandomNumbers
 using CycleWalk
+using LinearAlgebra
 
 using UnPack, TOML, ArgMacros
-include("runtimeParameters.jl") # see this file for parsing commandline args and passed toml data. 
+include("runtimeParameters.jl") # see this file for parsing commandline args and passed toml data.
                                 # It also set some variables derived from the toml data or commandline args
+
+# optionally pin BLAS threads (the spanning-forest log-determinant is BLAS-bound;
+# threaded BLAS can speed a single serial chain on large-district graphs)
+blas_threads > 0 && BLAS.set_num_threads(blas_threads)
 
 
 base_graph = BaseGraph(pctGraphPath, pop_col, inc_node_data=node_data,
@@ -26,10 +31,7 @@ constraints = initialize_constraints()
 add_constraint!(constraints, PopulationConstraint(graph, num_dists, pop_dev))
 
 rng = PCG.PCGStateOneseq(UInt64, rng_seed)
-initial_partition = MultiLevelPartition(graph, constraints, num_dists; 
-                                        rng=rng);
-
-partition = LinkCutPartition(initial_partition, rng);
+partition = LinkCutPartition(graph, constraints, num_dists; rng=rng);
 
 cycle_walk = build_two_tree_cycle_walk(constraints)
 internal_walk = build_one_tree_cycle_walk(constraints)
@@ -43,16 +45,18 @@ for fnct_str in measure_scores
     elseif fnct_str=="get_isoperimetric_score"
         push_energy!(measure, get_isoperimetric_score, iso_weight)
     else
-        fnct = getfield(LiftedTreeWalk, Symbol(statistic))
+        fnct = getfield(CycleWalk, Symbol(fnct_str))
         push_energy!(measure, fnct)
     end
 end
 
 @show output_file_path
-writer = Writer(measure, constraints, partition, output_file_path; 
-                additional_parameters=ad_param)
+writer = Writer(measure, constraints, partition, output_file_path;
+                additional_parameters=ad_param,
+                output_districting=output_districting,
+                io_mode=io_mode, description=description)
 for stat in writer_stats
-    fnct = getfield(LiftedTreeWalk, Symbol(stat))
+    fnct = getfield(CycleWalk, Symbol(stat))
     push_writer!(writer, fnct)
 end
 

@@ -8,6 +8,7 @@ using DataStructures:
 using Graphs
 using RandomNumbers
 using LinearAlgebra
+using SparseArrays: rowvals, nonzeros, nzrange
 using Hungarian
 import Combinatorics
 using Dates
@@ -118,10 +119,18 @@ export AbstractGraph,
     Writer,
     close_writer,
     push_writer!,
+    push_path_writer!,
 
     # mcmc
     run_metropolis_hastings!,
-    
+    run_annealed_importance_sampling!,
+    run_annealed_smc!,
+    FixedSchedule,
+    AdaptiveTempering,
+    LinearPath,
+    linear_path,
+    annealed_smc_scores_and_targets,
+
     # energies/observables
     Measure,
     push_energy!,
@@ -228,6 +237,8 @@ include("./proposals/lifted_tree_cycle_walk.jl")
 include("./proposals/internal_forest_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
+include("./chains/annealed_importance_sampling.jl")
+include("./chains/annealed_smc.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")
 end # module
