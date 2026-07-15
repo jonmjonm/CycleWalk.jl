@@ -30,6 +30,7 @@ Conventions used below:
 - [Diagnostics](#diagnostics)
 - [Writer (Atlas output)](#writer-atlas-output)
 - [Running the Sampler](#running-the-sampler)
+- [Annealed Importance Sampling & SMC](#annealed-importance-sampling--smc)
 - [Chain (convenience wrapper)](#chain-convenience-wrapper)
 - [Data Structures & Types Summary](#data-structures--types-summary)
 
@@ -283,15 +284,14 @@ push_energy!(measure::Measure, score::Function, weight::Real; desc::String="")
 
 Add a weighted score function to the measure. A zero weight is ignored.
 
-### `get_log_energy` / `get_delta_energy`
+### `get_log_energy`
 
 ```julia
 get_log_energy(partition, measure, districts=...; ) ::Float64
-get_delta_energy(partition::LinkCutPartition, measure::Measure, update::Update)
 ```
 
-`get_log_energy` evaluates the total weighted log-energy; `get_delta_energy`
-returns the energy ratio `exp(Δ)` for a proposed `update`.
+Evaluates the total weighted log-energy `∑ weightᵢ · scoreᵢ` of `measure` on
+`partition`.
 
 ### Energy / score functions
 
@@ -411,13 +411,20 @@ Writer(
     description::String="",
     time_stamp=string(Dates.now()),
     io_mode::String="w",
-    additional_parameters::Dict{String,Any}=Dict{String,Any}()
+    additional_parameters::Dict{String,Any}=Dict{String,Any}(),
+    weight_type::DataType=Int64,
+    path_target_points::Int=50
 )::Writer
 ```
 
 Opens the output file and writes the Atlas header (energies, weights, population
 bounds, constraint descriptions, package version, plus any
-`additional_parameters`).
+`additional_parameters`). `weight_type` is the type of each map's sampling weight:
+the default `Int64` suits ordinary MCMC runs (every map has weight 1); pass
+`Float64` when maps carry real-valued weights, as in
+[`run_annealed_importance_sampling!`](#run_annealed_importance_sampling).
+`path_target_points` sets the approximate number of points recorded per sample by
+[`push_path_writer!`](#push_path_writer).
 
 ### `push_writer!`
 
@@ -427,6 +434,23 @@ push_writer!(writer::Writer, get_data::Function; desc::Union{String,Nothing}=not
 
 Register a per-step observable `get_data(partition)` whose value is written into
 each output map under `desc`.
+
+### `push_path_writer!`
+
+```julia
+push_path_writer!(writer::Writer, spec::Symbol; desc::Union{String,Nothing}=nothing)
+push_path_writer!(writer::Writer, get_data::Function; desc::Union{String,Nothing}=nothing)
+```
+
+Register a per-step recorder along an annealing trajectory (AIS or annealed SMC
+rejuvenation): roughly `writer.path_target_points` points are recorded per sample
+and written into that sample's output map under `desc` (default `"path/"*string(spec)`)
+as a vector alongside the ordinary observables. `spec` is either a built-in symbol —
+`:log_weight` (running cumulative log importance weight), `:delta_log_weight` (that
+step's increment), or `:schedule_frac` (`cur_step/total_steps`) — or a partition
+observable `f(partition)` (e.g. `get_isoperimetric_score`, `get_log_spanning_forests`)
+evaluated on the intermediate annealing partition. Recording is fully opt-in: with no
+recorders registered there is no added cost.
 
 ### `close_writer`
 
@@ -451,7 +475,11 @@ run_metropolis_hastings!(
     rng::AbstractRNG;
     writer::Union{Writer, Nothing}=nothing,
     output_freq::Int=250,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    prestepf::Function=(x...)->nothing,
+    prestepargs::Tuple=(),
+    output_initial::Bool=true,
+    weight::Union{Real, MutableFloat}=1
 )
 ```
 
@@ -459,7 +487,133 @@ Run the Metropolis–Hastings sampler in place on `partition`. `proposal` is eit
 a single proposal closure or a weighted mixture (weights summing to `1`).
 `steps` is either a step count or an `(initial, final)` range. Every
 `output_freq` steps the current plan and registered observables/diagnostics are
-written to `writer`.
+written to `writer`; set `output_initial=false` to suppress the map otherwise
+written before the first step. `prestepf(step, prestepargs...)` is called before
+each proposal — this is the hook [`run_annealed_importance_sampling!`](#run_annealed_importance_sampling)
+uses to anneal `measure` and accumulate the log importance weight. `weight` is
+recorded as each output map's sampling weight; ordinary runs can leave it at the
+default `1` (a plain MCMC sample). `prestepf`/`prestepargs`/`weight` are the
+low-level hooks AIS is built on — most callers won't need them directly.
+
+---
+
+## Annealed Importance Sampling & SMC
+
+Two alternatives to sampling the target measure directly with
+`run_metropolis_hastings!`: both anneal from a base measure toward the target
+along a schedule, accumulating an importance weight/normalizer estimate as they go.
+
+### `run_annealed_importance_sampling!`
+
+```julia
+run_annealed_importance_sampling!(
+    partition::LinkCutPartition,
+    proposal::Union{Function, Vector{Tuple{<:Real, Function}}},
+    measure::Measure,
+    modify_measure!::Function,
+    total_steps::Int,
+    base_steps_per_sample::Int,
+    steps_per_annealing::Int,
+    rng::AbstractRNG;
+    writer::Union{Writer, Nothing}=nothing,
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    ntasks::Int=1
+)::Vector{Float64}
+```
+
+Run annealed importance sampling (AIS) and return the vector of log importance
+weights, one per annealing run. `modify_measure!(measure, cur_step, total_steps)`
+defines the annealing schedule: called with `(0, 1)` it must set `measure` to the
+base measure, and stepping `cur_step` from 1 to `total_steps` it must interpolate
+toward the target measure. The base chain runs on `partition` under the base
+measure for `base_steps_per_sample` Metropolis–Hastings steps between samples;
+each sample is then deep-copied and annealed toward the target for
+`steps_per_annealing` steps while its log weight is accumulated. The base chain
+takes `total_steps` steps in all, so `total_steps ÷ base_steps_per_sample`
+annealing runs are performed.
+
+Annealing runs execute on `ntasks` concurrent tasks (use `julia -t N` to give them
+threads); each run gets an independent, reproducible RNG. If a `writer` is
+supplied — construct it with `weight_type=Float64` — sample `i` is written as map
+`"sample<i>"` with its log importance weight as the map's weight.
+
+### `run_annealed_smc!`
+
+```julia
+run_annealed_smc!(
+    partition::LinkCutPartition,
+    proposal::Union{Function, Vector{Tuple{<:Real, Function}}},
+    measure::Measure,
+    schedule::AnnealSchedule,
+    n_particles::Int,
+    rejuv_steps::Int,
+    rng::AbstractRNG;
+    path::Union{AnnealPath, Function, Nothing}=nothing,
+    init_steps::Int=0,
+    collect_steps::Int=0,
+    collect_every::Int=100,
+    resample_before_collect::Bool=true,
+    writer::Union{Writer, Nothing}=nothing,
+    run_diagnostics::RunDiagnostics=RunDiagnostics()
+) -> (particles, logZ, trace)
+```
+
+Run an annealed sequential Monte Carlo (SMC) sampler: a population of
+`n_particles` is jointly tempered from the base measure to the target, resampling
+and rejuvenating (`rejuv_steps` Metropolis-Hastings steps per particle) as needed.
+`schedule` (a [`FixedSchedule`](#fixedschedule) or [`AdaptiveTempering`](#adaptivetempering))
+is the sole thing distinguishing the two variants; `path` (default:
+[`linear_path`](#linear_path) built from `measure`'s target weights) is the
+swappable path geometry. Returns the final (near-equally-weighted) particles, the
+log-normalizer estimate `logZ`, and a per-block trace of `(t, ess, resampled)`.
+
+With `collect_steps > 0`, after the population reaches `t=1` the sampler keeps
+applying MH moves at the target measure and, to `writer`, emits every particle's
+state once per `collect_every` steps — yielding far more than `n_particles`
+samples without enlarging the population. With the default `collect_steps=0` the
+writer gets one map per particle (the annealing-final state).
+`resample_before_collect` (default `true`) resamples to equal weights at `t=1`
+before amplifying, so every collected sample is unweighted; `logZ` is finalized
+first, so this does not affect it.
+
+### `FixedSchedule`
+
+```julia
+FixedSchedule(grid; ess_frac=0.5)
+```
+
+A precomputed increasing `t`-grid ending at `1.0` (e.g. `range(0, 1, length=K+1)`).
+Resamples adaptively when ESS drops below `ess_frac * n_particles`.
+
+### `AdaptiveTempering`
+
+```julia
+AdaptiveTempering(; ess_target=0.5)
+```
+
+Chooses each `t_next` online so the population ESS drops to `ess_target *
+n_particles`, resampling every step.
+
+### `LinearPath` / `linear_path`
+
+```julia
+linear_path(target_w::NTuple{K,Float64}) -> LinearPath
+```
+
+The default path geometry: energy term weights vary linearly in `t`,
+`t ↦ t .* target_w`, where `target_w` is the target measure's per-term weights
+(see `annealed_smc_scores_and_targets`). `LinearPath` is the underlying type; most
+callers only need `linear_path`, or can pass a bare `t -> NTuple{K,Float64}`
+function as `run_annealed_smc!`'s `path` keyword directly.
+
+### `annealed_smc_scores_and_targets`
+
+```julia
+annealed_smc_scores_and_targets(measure::Measure) -> (scores, target_w)
+```
+
+Freeze a target `measure` into an ordered tuple of energy functions (`scores`)
+and their target weights (`target_w`), the inputs `linear_path` expects.
 
 ---
 
@@ -504,6 +658,9 @@ run_chain!(partition, chain::Chain, steps::Union{Int, Tuple{Int,Int}})
 | `BudgetedRegionConstraint` | struct | CycleWalk |
 | `Measure` | mutable struct | CycleWalk |
 | `Writer` | mutable struct | CycleWalk |
+| `FixedSchedule` | mutable struct | CycleWalk |
+| `AdaptiveTempering` | mutable struct | CycleWalk |
+| `LinearPath{K,F}` | struct | CycleWalk |
 | `Chain{T}` | mutable struct | CycleWalk |
 | `RunDiagnostics` | type alias (`Dict`) | CycleWalk |
 | `ProposalDiagnostics` | type alias (`Dict`) | CycleWalk |

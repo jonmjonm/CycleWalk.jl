@@ -22,7 +22,9 @@ district compactness. The target is per-case:
   halves of each run.
 - `analyze_weights.jl` — importance-weight diagnostics for the AIS Atlases: log-weight
   statistics, ESS, weight concentration (`n50`/`n90`), and ASCII log-weight histograms.
-  With no args it reads the preserved `output/validation/*_ais_a{4000,16000}.jsonl.gz`.
+  With no args it looks for a default set of `output/validation/<case>_ais_a<steps>.jsonl.gz`
+  files (produced by tagging `run_case.jl --mode ais` runs with `--tag a<steps>`); pass
+  explicit Atlas paths as `ARGS` to analyze a different set.
 - `plot_weights.jl` — renders three self-contained SVG/PNG figures from the same
   weight files (centered log-weight densities, weight-concentration curves, and
   ESS vs σ against the `exp(−σ²)` law) into `output/validation/`.
@@ -30,23 +32,19 @@ district compactness. The target is per-case:
   the annealing schedule the weight variance is injected** (across the recorded per-sample
   trajectories) and prints/plots a **suggested non-linear reschedule** (`u → γ/target`
   warp, saved to `path_<case>_reschedule.csv`).
-- `hpc/` — scripts to run the larger **weight-collapse study** (CT 5-dist and NC 14-dist
-  at 4k/16k/24k with path recording) on a big machine over a persistent SSH connection.
-  See `hpc/README.md`.
+- `analyze_rhat.jl` / `analyze_convergence.jl` — per-district split-R-hat (Gelman-Rubin)
+  and TV-vs-noise convergence checks across multiple independent chains, used to decide
+  whether a cycle walk has mixed at a given point on the annealing schedule.
+- `dump_marginals.jl` — dumps per-rank marginal histograms across a set of tagged runs to
+  a CSV for downstream plotting.
 
 Cases: `small`, `ct`, `grid`, and `nc` (NC 2020 precincts, 14 districts). Size knobs on
 `run_case.jl`: `--samples`, `--anneal-steps`, `--base-steps`, `--path-points`,
 `--record-path`.
 
-## Results write-up
-
-`RESULTS.md` is the full production report: per-case verdicts, the split-half
-noise-floor methodology, runtimes, and the importance-weight analysis (with the figures
-above and a pro/con assessment of whether the AIS chain is behaving well). Headline
-outcome: **small validates exactly; grid validates once annealed enough (ESS 65%→90%,
-gap → noise floor at `--anneal-steps 16000`); CT does not validate at 4k or 16k** — its
-weights collapse (ESS ≈ 0.1–0.2%), diagnosing that the γ=0 base and the target are too
-far apart for a short linear anneal, not a correctness bug.
+Larger multi-chain studies (bisection convergence sweeps, weight-collapse sweeps across
+annealing-schedule lengths) are driven by shell scripts that live outside this repo, since
+they aren't part of the CycleWalk.jl package itself — they just call the scripts above.
 
 ## Cases
 
@@ -55,6 +53,7 @@ far apart for a short linear anneal, not a correctness bug.
 | `small` | `test/test_graphs/4x4pct_2x2cnty.json` | 4 |
 | `ct`    | `data/ct/CT_pct20.json` | 5 |
 | `grid`  | `data/grid/grid_graph_10_by_10.json` | 3 |
+| `nc`    | `test/test_graphs/NC_pct21.json` | 14 |
 
 ## Run
 

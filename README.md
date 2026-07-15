@@ -29,7 +29,7 @@ The Metropolized Cycle Walk algorithm uses these walks as proposals to a Metropo
 
 More details on the algorithm can be found in the [Cycle Walk paper](https://arxiv.org/abs/2509.08629).
 
-## Instillation
+## Installation
 
 The latest released version of the `CycleWalk.jl` package can be installed from within Julia by 
 
@@ -68,6 +68,31 @@ There are also example TOML files for grid and hexagonal districts in the `examp
 julia run_cyclewalk_toml.jl toml/param_grid10x10.toml
 ```
 One must be in the `examples` directory to run both of these commands.
+
+### Annealed Importance Sampling (AIS)
+
+Annealed importance sampling is an alternative to the standard Metropolized Cycle Walk:
+a base chain samples the spanning-forest measure, and each retained sample is annealed
+toward the target measure while its log importance weight is accumulated, rather than
+being sampled from the target measure directly by the Metropolis-Hastings walk.
+
+The script [`examples/run_ais_ct.jl`](./examples/run_ais_ct.jl) gives a direct example of
+running AIS for Connecticut. [`examples/run_ais_toml.jl`](./examples/run_ais_toml.jl) runs
+AIS from a TOML configuration file (see `examples/toml/param_ais_ct.toml`):
+```
+julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
+```
+
+### Annealed Sequential Monte Carlo (SMC)
+
+The script [`examples/run_asmc_toml.jl`](./examples/run_asmc_toml.jl) runs an annealed
+SMC sampler — a population of particles is jointly tempered toward the target measure,
+resampling and rejuvenating as needed — from a TOML configuration file. Both a fixed
+temperature schedule and an adaptive schedule (`FixedSchedule` / `AdaptiveTempering`) are
+supported; see `examples/toml/param_annealed_smc_grid.toml` for an example configuration.
+```
+julia -t 4 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
+```
 
 
 
