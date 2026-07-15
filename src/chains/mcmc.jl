@@ -30,10 +30,20 @@ function run_metropolis_hastings!(
     prestepf::Function=(x...)->nothing,
     prestepargs::Tuple=(),
     output_initial::Bool=true,
-    weight::Union{Real, MutableFloat}=1
+    weight::Union{Real, MutableFloat}=1,
+    seed=nothing
 ) where T <: Real
     # Want this, but need to redefine it: precompute_node_tree_counts!(partition)
     check_proposals_weights(proposal)
+
+    # Stamp this run's metadata onto the atlas header before any map is written. Inner
+    # annealing chains (AIS/ASMC rejuvenation) pass writer=nothing, so only a genuine
+    # standalone MH run records the "standard metropolized CycleWalk" tag.
+    if writer !== nothing
+        stamp_run_metadata!(writer,
+            metropolis_hastings_run_metadata(proposal, steps;
+                                             seed=seed, output_freq=output_freq))
+    end
 
     initial_step, final_step = set_step_bounds(steps)
     if (initial_step == 0 || initial_step == 1) && output_initial

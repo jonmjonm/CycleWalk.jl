@@ -391,6 +391,7 @@ function run_annealed_smc!(
     resample_before_collect::Bool=true,
     writer::Union{Writer,Nothing}=nothing,
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    seed=nothing,
 ) where {T<:Real}
 
     scores, target_w = annealed_smc_scores_and_targets(measure)
@@ -398,6 +399,16 @@ function run_annealed_smc!(
     path === nothing && (path = linear_path(target_w))
     path isa Function && (path = LinearPath{K}(path))   # bare t↦NTuple ⇒ linear
     work_measure = deepcopy(measure)
+
+    # Stamp this run's metadata onto the atlas header before any particle is written.
+    if writer !== nothing
+        stamp_run_metadata!(writer,
+            annealed_smc_run_metadata(measure, schedule, n_particles, rejuv_steps;
+                                      seed=seed, path=path, proposal=proposal,
+                                      init_steps=init_steps, collect_steps=collect_steps,
+                                      collect_every=collect_every,
+                                      resample_before_collect=resample_before_collect))
+    end
 
     # per-particle diagnostics: run_metropolis_hastings! mutates its diagnostics,
     # so threaded rejuvenation needs one object per particle (no shared state)

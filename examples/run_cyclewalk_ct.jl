@@ -74,7 +74,7 @@ push_writer!(writer, get_isoperimetric_scores) # add isoperimetric scores to wri
 ## run MCMC sampler
 println("running mcmc; outputting here: "* output_file_path)
 run_metropolis_hastings!(partition, proposal, measure, steps, rng,
-                         writer=writer, output_freq=outfreq
+                         writer=writer, output_freq=outfreq, seed=4541901234
                         #, run_diagnostics = run_diagnostics  ## Uncoment this line to run diagnostics
 )
 close_writer(writer) # close atlas

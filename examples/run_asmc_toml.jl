@@ -180,7 +180,8 @@ println("  -> $output_file_path  (~$n_maps maps)")
                       path=path,
                       init_steps=init_steps, collect_steps=collect_steps,
                       collect_every=collect_every,
-                      resample_before_collect=resample_before_collect, writer=writer)
+                      resample_before_collect=resample_before_collect,
+                      writer=writer, seed=seed)
 close_writer(writer)
 
 # ---------------------------------------------------------------------------

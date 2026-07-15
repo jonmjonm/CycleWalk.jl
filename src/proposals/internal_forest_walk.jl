@@ -137,7 +137,7 @@ function build_internal_forest_walk(
 )
     f(p, r; diagnostics=nothing) = internal_forest_walk!(p, r;
                                                         diagnostics=diagnostics)
-    return f
+    return name_proposal!(f, "one_tree_cycle_walk")
 end
 
 const build_one_tree_cycle_walk = build_internal_forest_walk

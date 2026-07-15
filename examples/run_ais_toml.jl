@@ -126,8 +126,7 @@ atlasName *= ".jsonl" * compress
 output_file_path = joinpath(outputDirectory..., atlasName)
 mkpath(dirname(output_file_path))
 
-ad_param = Dict{String, Any}("popdev" => pop_dev,
-                             "steps per annealing" => steps_per_annealing)
+ad_param = Dict{String, Any}("popdev" => pop_dev)
 writer = Writer(measure, constraints, partition, output_file_path;
                 additional_parameters=ad_param, weight_type=Float64,
                 output_districting=output_districting,
@@ -143,7 +142,8 @@ println("running AIS on ", ntasks, " task(s); outputting here: ", output_file_pa
 log_weights = run_annealed_importance_sampling!(
     partition, proposal, measure, modify_measure!, total_steps,
     base_steps_per_sample, steps_per_annealing, rng;
-    writer=writer, ntasks=ntasks)
+    writer=writer, ntasks=ntasks,
+    seed=rng_seed_base + 15123 * thread_id, schedule=schedule)
 close_writer(writer)
 
 # summarize log importance weights (stable: subtract the max before exponentiating)

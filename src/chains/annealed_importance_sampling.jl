@@ -150,9 +150,20 @@ function run_annealed_importance_sampling!(
     rng::AbstractRNG;
     writer::Union{Writer, Nothing}=nothing,
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
-    ntasks::Int=1
+    ntasks::Int=1,
+    seed=nothing,
+    schedule::String="linear"
 )::Vector{Float64} where T <: Real
     @assert ntasks >= 1
+
+    # Stamp this run's metadata onto the atlas header before any sample is written.
+    if writer !== nothing
+        stamp_run_metadata!(writer,
+            annealed_importance_sampling_run_metadata(
+                measure, modify_measure!, total_steps, base_steps_per_sample,
+                steps_per_annealing; seed=seed, proposal=proposal, ntasks=ntasks,
+                schedule=schedule))
+    end
 
     # The spanning-forest energy takes a log-determinant per district, which calls
     # into (OpenBLAS) LAPACK. BLAS defaults to many threads, so with several
