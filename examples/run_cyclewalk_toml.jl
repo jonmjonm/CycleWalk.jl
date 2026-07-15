@@ -75,7 +75,7 @@ println("Using $num_dists districts and $pop_dev population deviation")
 
 run_metropolis_hastings!(partition, proposal, measure, steps, rng,
                          writer=writer, output_freq=outfreq,
-                         run_diagnostics=run_diagnostics);
+                         run_diagnostics=run_diagnostics, seed=rng_seed);
                         
 close_writer(writer)
 println("CycleWalk completed. Output written to $output_file_path")

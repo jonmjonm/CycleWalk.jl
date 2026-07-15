@@ -130,6 +130,12 @@ export AbstractGraph,
     LinearPath,
     linear_path,
     annealed_smc_scores_and_targets,
+    describe_proposal,
+    name_proposal!,
+    proposal_name,
+    metropolis_hastings_run_metadata,
+    annealed_importance_sampling_run_metadata,
+    annealed_smc_run_metadata,
 
     # energies/observables
     Measure,
@@ -189,6 +195,7 @@ include("./trees/russo_ust.jl")
 # type defs
 include("./measure/energy/energy_types.jl")
 include("./proposals/update.jl")
+include("./proposals/named_proposal.jl")
 include("./diagnostics/proposal_diagnostics_types.jl")
 
 include("./measure/constraints/constraints.jl")
@@ -239,6 +246,7 @@ include("./chains/chain.jl")
 include("./chains/mcmc.jl")
 include("./chains/annealed_importance_sampling.jl")
 include("./chains/annealed_smc.jl")
+include("./io/run_metadata.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")
 end # module

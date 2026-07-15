@@ -42,6 +42,7 @@ mutable struct Writer
     node_field::String
     path_recorders::Vector{PathRecorder}
     path_target_points::Int
+    header_written::Bool
 end
 
 """
@@ -108,10 +109,12 @@ function Writer(
         mkpath(dir)
     end
 
-    atlasHeader = AtlasHeader(description, time_stamp, AtlasParam, MapParam;
-                              weightType=weight_type)
+    # The Atlas header (the file's first three lines) is NOT written here: it is
+    # deferred to `write_header!` so that a `run_*!` sampler can stamp its run
+    # metadata into `atlasParam` first (see [`stamp_run_metadata!`](@ref)). The header
+    # is written exactly once, at the top of the run — before any map — with any manual
+    # write and `close_writer` guarding it as a safety net.
     io = smartOpen(output_file_path, io_mode)
-    newAtlas(io, atlasHeader, atlasParam)
 
     atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam,
                               weight_type)
@@ -121,7 +124,47 @@ function Writer(
 
     return Writer(atlas, MapParam(), map_output_data, output_districting,
                   node_map, partition.node_col,
-                  PathRecorder[], path_target_points)#, proposal_diagnostics)
+                  PathRecorder[], path_target_points, false)#, proposal_diagnostics)
+end
+
+"""
+    write_header!(writer)
+
+Write the Atlas header (the file's first three lines: format banner, header record,
+and the `atlasParam` dictionary) to disk, exactly once. Deferred from the `Writer`
+constructor so a `run_*!` sampler can merge its run metadata into `atlasParam` first
+(see [`stamp_run_metadata!`](@ref)). Idempotent: no-op once the header is written, so it
+is safe to call from every map-writing entry point.
+"""
+function write_header!(writer::Writer)
+    writer.header_written && return
+    atlasHeader = AtlasHeader(writer.atlas.description, writer.atlas.date,
+                              AtlasParam, MapParam;
+                              weightType=writer.atlas.weightType)
+    newAtlas(writer.atlas.io, atlasHeader, writer.atlas.atlasParam)
+    writer.header_written = true
+    return
+end
+
+"""
+    stamp_run_metadata!(writer, metadata)
+
+Merge a sampler's run-metadata dict (see the `*_run_metadata` builders) into the
+writer's `atlasParam` and then write the header. Existing keys are preserved — any
+`additional_parameters` the caller passed to [`Writer`](@ref) win over the auto-stamped
+fields — so a user's own entries are never clobbered. No-op if `writer === nothing` or
+the header is already written (metadata must be stamped before the first map). Called at
+the top of each `run_*!` sampler.
+"""
+function stamp_run_metadata!(writer::Union{Writer, Nothing}, metadata::AbstractDict)
+    writer === nothing && return
+    if !writer.header_written
+        for (k, v) in metadata
+            haskey(writer.atlas.atlasParam, k) || (writer.atlas.atlasParam[k] = v)
+        end
+    end
+    write_header!(writer)
+    return
 end
 
 """
@@ -185,6 +228,7 @@ end
 Flush and close the underlying Atlas file. Call once after the run finishes.
 """
 function close_writer(writer::Writer)
+    write_header!(writer)   # ensure a valid file even if no map was ever written
     close(writer.atlas.io)
 end
 
@@ -301,6 +345,7 @@ function output(
     if writer == nothing
         return
     end
+    write_header!(writer)   # safety net for direct map writes (no-op after the first)
     if weight isa MutableFloat
         weight = weight.value
     end

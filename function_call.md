@@ -241,8 +241,8 @@ captured against a constraint set. They come in two families:
   and recuts, moving the boundary between two districts.
 
 ```julia
-build_internal_forest_walk(constraints::Constraints)   # one-tree walk
-build_one_tree_cycle_walk    = build_internal_forest_walk   # alias
+build_one_tree_cycle_walk(constraints::Constraints)    # one-tree walk
+build_internal_forest_walk   = build_one_tree_cycle_walk    # alias (same function)
 
 build_lifted_tree_cycle_walk(constraints::Constraints) # two-tree walk
 build_cycle_walk             = build_lifted_tree_cycle_walk # alias

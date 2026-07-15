@@ -60,6 +60,7 @@ include(joinpath(testdir, "test_option_b.jl"))
 include(joinpath(testdir, "test_cuttable_edges.jl"))
 include(joinpath(testdir, "test_annealed_importance_sampling.jl"))
 include(joinpath(testdir, "test_annealed_smc.jl"))
+include(joinpath(testdir, "test_run_metadata.jl"))
 include(joinpath(testdir, "test_docs_coverage.jl"))
 @testset verbose = true "observables_and_diagnostics" begin
     include(joinpath(testdir, "test_observables_diagnostics.jl"))

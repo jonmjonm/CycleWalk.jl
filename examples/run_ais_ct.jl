@@ -83,7 +83,7 @@ println("running AIS on ", ntasks, " task(s); outputting here: ",
 log_weights = run_annealed_importance_sampling!(
     partition, proposal, measure, modify_measure!, total_steps,
     base_steps_per_sample, steps_per_annealing, rng;
-    writer=writer, ntasks=ntasks)
+    writer=writer, ntasks=ntasks, seed=4541901234)
 close_writer(writer) # close atlas
 
 ## summarize the log importance weights; subtract the max before
