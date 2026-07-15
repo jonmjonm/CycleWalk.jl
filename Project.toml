@@ -1,6 +1,6 @@
 name = "CycleWalk"
 uuid = "ac9cec89-1413-42d8-a7d6-c246d938c565"
-version = "0.1.12"
+version = "0.2"
 authors = ["Jonathan Mattingly <jonathan.mattingly@duke.edu>", "Gregory Herschlag <Gregory.Herschlag@duke.edu>"]
 
 [deps]
@@ -27,7 +27,7 @@ Graphs = "1"
 Hungarian = "0.7"
 JSON = "1"
 LinearAlgebra = "1"
-LinkCutTreesAugmented = "0.1"
+LinkCutTreesAugmented = "0.1.1"
 MetropolizedForestRecom = "0.1"
 RandomNumbers = "1"
 SimpleWeightedGraphs = "1"
