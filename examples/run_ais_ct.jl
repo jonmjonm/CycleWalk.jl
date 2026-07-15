@@ -33,6 +33,7 @@ ntasks = Threads.nthreads() # concurrent annealing runs
 
 ## build graph
 pctGraphPath = joinpath("data","ct","CT_pct20.json")
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 nodeData = Set(["COUNTY", "NAME", "POP20", "area", "border_length"]);
 graph = Graph(pctGraphPath, "POP20", "NAME"; inc_node_data=nodeData,
               area_col="area", node_border_col="border_length",
@@ -67,6 +68,7 @@ atlasName *= "_gamma"*string(gamma)
 atlasName *= "_iso"*string(iso_weight)
 atlasName *= ".jsonl.gz" # or just ".jsonl" for an uncompressed output
 output_file_path = joinpath("output","ct", atlasName)
+mkpath(dirname(output_file_path))
 
 ## establish writer; weight_type=Float64 so maps carry log importance weights
 ad_param = Dict{String, Any}("popdev" => pop_dev,

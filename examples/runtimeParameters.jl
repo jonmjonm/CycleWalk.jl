@@ -75,6 +75,7 @@ if gamma > 0; atlasName *="_gamma"*string(gamma) end
 if iso_weight > 0; atlasName *="_iso"*string(iso_weight) end
 atlasName *= ".jsonl"*compress
 output_file_path = joinpath(outputDirectory... , atlasName)
+mkpath(dirname(output_file_path))
 
 @show thread_id
 @show steps, outfreq
@@ -84,4 +85,5 @@ output_file_path = joinpath(outputDirectory... , atlasName)
 @show node_data
 
 pctGraphPath = joinpath(map_directory... , map_file)
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 @show pctGraphPath

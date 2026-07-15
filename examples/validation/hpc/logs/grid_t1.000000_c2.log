@@ -1,5 +1,0 @@
-  Activating project at `~/Git/MergeAnneledTemp/CycleWalk.jl/examples`
-(collect(keys(partition.district_to_nodes[1])))[1:min(10, end)] = Tuple{Vararg{String}}[("(3,0)",), ("(4,0)",), ("(6,2)",), ("(0,1)",), ("(4,1)",), ("(6,0)",), ("(8,1)",), ("(2,0)",), ("(4,2)",), ("(3,1)",)]
-case=grid mode=cyclewalk dev=false ntasks=1 steps_per_annealing=4000
-  -> /Users/jonm/Git/MergeAnneledTemp/CycleWalk.jl/examples/output/validation/grid_cyclewalk_t1.000000_c2.jsonl.gz
-collected ~300 cycle-walk samples (1 per 20 steps)

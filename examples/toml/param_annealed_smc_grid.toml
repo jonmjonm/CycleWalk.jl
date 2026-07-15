@@ -14,8 +14,12 @@ map_file = "grid_graph_10_by_10.json"
 
 [measure]
 measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
-gamma = 0.25
+gamma = 0.25          # target weights at t=1
 iso_weight = 0.3
+# gamma_start / iso_start: base weights at t=0 (default 0). Set them, or pass
+# --gamma-start/--iso-start, to anneal between two nonzero parameter sets.
+# gamma_start = 0.0
+# iso_start = 0.0
 
 [smc]
 schedule = "fixed"

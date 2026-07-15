@@ -4,8 +4,9 @@
 #   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml --particles 2048 --rejuv 3000 \
 #                               --collect-steps 8000 --collect-every 500
 #
-# A population of `particles` is annealed from the base measure (all weights 0) to the
-# [measure] target along `blocks` t-steps, resampling when ESS drops and rejuvenating
+# A population of `particles` is annealed from the base measure ([measure]
+# gamma_start/iso_start, default 0 = all weights 0) to the [measure] target along
+# `blocks` t-steps, resampling when ESS drops and rejuvenating
 # `rejuv` MH steps per block. With collect_steps>0, after t=1 the sampler keeps sampling
 # the target and emits each particle every collect_every steps (option-1 amplification:
 # particles * collect_steps/collect_every samples). See run_asmc.jl for the CLI-only
@@ -37,6 +38,8 @@ args = @dictarguments begin
     @argumentoptional Number   ess_target    "--ess-target"
     @argumentoptional Number   gamma         "--gamma"
     @argumentoptional Number   iso_weight    "--iso-weight"
+    @argumentoptional Number   gamma_start   "--gamma-start"
+    @argumentoptional Number   iso_start     "--iso-start"
     @argumentoptional Int      seed          "--seed"
     @positionalrequired String toml_config_file
 end
@@ -60,6 +63,8 @@ cli!("smc", "ess_frac",      args[:ess_frac])
 cli!("smc", "ess_target",    args[:ess_target])
 cli!("measure", "gamma",      args[:gamma])
 cli!("measure", "iso_weight", args[:iso_weight])
+cli!("measure", "gamma_start", args[:gamma_start])
+cli!("measure", "iso_start",   args[:iso_start])
 cli!("run", "seed",          args[:seed])
 
 # ---------------------------------------------------------------------------
@@ -73,6 +78,8 @@ edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
 num_dists = Int(num_dists)
 
 @unpack gamma, iso_weight = params["measure"]
+gamma_start = Float64(get(params["measure"], "gamma_start", 0.0))
+iso_start   = Float64(get(params["measure"], "iso_start",   0.0))
 measure_scores = get(params["measure"], "measure_scores",
                      ["get_log_spanning_forests", "get_isoperimetric_score"])
 
@@ -102,7 +109,9 @@ nthreads            = Threads.nthreads()
 # ---------------------------------------------------------------------------
 # graph / partition / proposal
 # ---------------------------------------------------------------------------
-graph = Graph(joinpath(map_directory..., map_file), pop_col, geo_units[1];
+pctGraphPath = joinpath(map_directory..., map_file)
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
+graph = Graph(pctGraphPath, pop_col, geo_units[1];
               inc_node_data=Set(node_data), area_col=area_col,
               node_border_col=node_border_col, edge_perimeter_col=edge_perimeter_col)
 constraints = initialize_constraints()
@@ -114,21 +123,35 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(two_cycle_walk_frac, cycle_walk), (1.0 - two_cycle_walk_frac, internal_walk)]
 
 # ---------------------------------------------------------------------------
-# target measure (SMC's default linear path ramps these from 0 -> target)
+# target measure + base measure. The linear path ramps each term from its base
+# weight (gamma_start/iso_start, default 0) at t=0 to its target at t=1. A term is
+# annealed if either endpoint is nonzero.
 # ---------------------------------------------------------------------------
 target_weight = Dict{String,Float64}("get_log_spanning_forests" => gamma,
                                      "get_isoperimetric_score"   => iso_weight)
+base_weight   = Dict{String,Float64}("get_log_spanning_forests" => gamma_start,
+                                     "get_isoperimetric_score"   => iso_start)
 measure = Measure()
 for sc in measure_scores
     haskey(target_weight, sc) || error("unsupported measure score \"$sc\"")
-    target_weight[sc] > 0 && push_energy!(measure, getfield(CycleWalk, Symbol(sc)), target_weight[sc])
+    (target_weight[sc] > 0 || base_weight[sc] > 0) &&
+        push_energy!(measure, getfield(CycleWalk, Symbol(sc)), target_weight[sc])
 end
+
+# Linear path from base weights (t=0) to target weights (t=1), aligned to the exact
+# `scores` order the driver freezes. All-zero base recovers the default linear_path.
+scores, target_w = annealed_smc_scores_and_targets(measure)
+K = length(scores)
+name_of = Dict(getfield(CycleWalk, Symbol(sc)) => sc for sc in measure_scores)
+base_w  = ntuple(k -> base_weight[name_of[scores[k]]], K)
+path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]), K))
 
 # ---------------------------------------------------------------------------
 # writer: run-tagged atlas name (graph / size / threads) so runs never overwrite
 # ---------------------------------------------------------------------------
 tag = @sprintf("_smc_p%d_b%d_r%d_t%d", particles, blocks, rejuv, nthreads)
 collect_steps > 0 && (tag *= @sprintf("_c%de%d", collect_steps, collect_every))
+(gamma_start > 0 || iso_start > 0) && (tag *= @sprintf("_start_g%g_i%g", gamma_start, iso_start))
 outdir = get(ENV, "CW_OUTDIR", joinpath(@__DIR__, outputDirectory...))
 mkpath(outdir)
 output_file_path = joinpath(outdir, atlasNameBase * tag * ".jsonl" * compress)
@@ -149,10 +172,12 @@ schedule = schedule_kind == "adaptive" ?
 n_maps = particles * (collect_steps > 0 ? div(collect_steps, max(collect_every, 1)) : 1)
 println("SMC $(atlasNameBase)/$(schedule_kind): N=$particles blocks=$blocks rejuv=$rejuv ",
         "init=$init_steps collect=$collect_steps/$collect_every threads=$nthreads")
-println("  target γ=$gamma iso=$iso_weight  -> $output_file_path  (~$n_maps maps)")
+println("  base γ=$gamma_start iso=$iso_start  ->  target γ=$gamma iso=$iso_weight")
+println("  -> $output_file_path  (~$n_maps maps)")
 
 @time particles_out, logZ, trace =
     run_annealed_smc!(partition, proposal, measure, schedule, particles, rejuv, rng;
+                      path=path,
                       init_steps=init_steps, collect_steps=collect_steps,
                       collect_every=collect_every,
                       resample_before_collect=resample_before_collect, writer=writer)

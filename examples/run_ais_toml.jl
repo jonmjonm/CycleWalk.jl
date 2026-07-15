@@ -2,9 +2,10 @@
 #
 #   julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
 #
-# A base chain samples the spanning-forest measure (all energy weights 0) and each
-# retained sample is annealed toward the target measure (the [measure] weights) while
-# its log importance weight is accumulated. Annealing runs execute on `ntasks`
+# A base chain samples the base measure ([measure] gamma_start/iso_start, default 0 =
+# spanning-forest) and each retained sample is annealed toward the target measure (the
+# [measure] gamma/iso_weight) while its log importance weight is accumulated. Annealing
+# runs execute on `ntasks`
 # concurrent tasks — start Julia with threads (-t). See run_ais_ct.jl for the same run
 # expressed directly in Julia, and run_cyclewalk_toml.jl for the serial TOML runner.
 
@@ -31,8 +32,12 @@ node_border_col    = get(params["plans"], "node_border_col", nothing)
 edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
 num_dists = Int(num_dists)
 
-# [measure] — these are the ANNEALING TARGETS; the base chain starts every weight at 0
+# [measure] — `gamma`/`iso_weight` are the ANNEALING TARGETS (t=1). `gamma_start`/
+# `iso_start` (default 0) are the BASE measure the base chain samples (t=0); the base
+# chain must be able to mix under them. Default 0/0 recovers the spanning-forest base.
 @unpack gamma, iso_weight = params["measure"]
+gamma_start = Float64(get(params["measure"], "gamma_start", 0.0))
+iso_start   = Float64(get(params["measure"], "iso_start",   0.0))
 measure_scores = get(params["measure"], "measure_scores",
                      ["get_log_spanning_forests", "get_isoperimetric_score"])
 
@@ -69,6 +74,7 @@ blas_threads > 0 && BLAS.set_num_threads(blas_threads)
 # ---------------------------------------------------------------------------
 node_data = Set(node_data)
 pctGraphPath = joinpath(map_directory..., map_file)
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 graph = Graph(pctGraphPath, pop_col, geo_units[1]; inc_node_data=node_data,
               area_col=area_col, node_border_col=node_border_col,
               edge_perimeter_col=edge_perimeter_col)
@@ -89,6 +95,8 @@ proposal = [(two_cycle_walk_frac, cycle_walk),
 # ---------------------------------------------------------------------------
 target_weight = Dict{String, Float64}("get_log_spanning_forests" => gamma,
                                       "get_isoperimetric_score"   => iso_weight)
+base_weight   = Dict{String, Float64}("get_log_spanning_forests" => gamma_start,
+                                      "get_isoperimetric_score"   => iso_start)
 measure = Measure()
 for s in measure_scores
     haskey(target_weight, s) ||
@@ -96,12 +104,12 @@ for s in measure_scores
     push_energy!(measure, getfield(CycleWalk, Symbol(s)), target_weight[s])
 end
 
-# ramp every energy weight linearly from 0 (base measure) to its target
+# ramp every energy weight linearly from its base value (step 0) to its target
 function modify_measure!(m::Measure, step::Int, total::Int)
     frac = step / total
     for s in measure_scores
         fnct = getfield(CycleWalk, Symbol(s))
-        m.weights[fnct] = target_weight[s] * frac
+        m.weights[fnct] = base_weight[s] + (target_weight[s] - base_weight[s]) * frac
     end
 end
 
@@ -110,10 +118,13 @@ end
 # ---------------------------------------------------------------------------
 atlasName  = atlasNameBase * "_thread" * string(thread_id)
 atlasName *= "_ais_2cf" * string(two_cycle_walk_frac)
-gamma      > 0 && (atlasName *= "_gamma" * string(gamma))
-iso_weight > 0 && (atlasName *= "_iso" * string(iso_weight))
+gamma       > 0 && (atlasName *= "_gamma" * string(gamma))
+iso_weight  > 0 && (atlasName *= "_iso" * string(iso_weight))
+gamma_start > 0 && (atlasName *= "_gammastart" * string(gamma_start))
+iso_start   > 0 && (atlasName *= "_isostart" * string(iso_start))
 atlasName *= ".jsonl" * compress
 output_file_path = joinpath(outputDirectory..., atlasName)
+mkpath(dirname(output_file_path))
 
 ad_param = Dict{String, Any}("popdev" => pop_dev,
                              "steps per annealing" => steps_per_annealing)

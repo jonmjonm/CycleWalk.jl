@@ -10,11 +10,16 @@ edge_perimeter_col="length"
 map_directory=["data","ct"]
 map_file="CT_pct20.json"
 
-# annealing TARGETS (the base chain starts every weight at 0 and ramps to these)
+# annealing endpoints. gamma/iso_weight are the TARGETS (t=1); gamma_start/iso_start
+# are the BASE measure the base chain samples (t=0, default 0). Default base 0/0 ramps
+# every weight up from the spanning-forest measure; set them to anneal between two
+# nonzero parameter sets (the base chain must be able to mix under the base measure).
 [measure]
 measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
 gamma=1.0
 iso_weight=0.3
+# gamma_start=0.0
+# iso_start=0.0
 
 [ais]
 total_steps=1.0e4            # total base-chain steps

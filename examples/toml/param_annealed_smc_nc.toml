@@ -16,11 +16,16 @@ edge_perimeter_col = "length"
 map_directory = ["..", "test", "test_graphs"]   # NC_pct21.json lives in the repo's test graphs
 map_file = "NC_pct21.json"
 
-# annealing TARGET weights (t=0 base has every weight 0, ramping to these at t=1)
+# annealing endpoints. gamma/iso_weight are the TARGET weights (t=1); gamma_start/
+# iso_start are the BASE weights at t=0 (default 0). Default base 0/0 ramps up from
+# all-zero; set them (or pass --gamma-start/--iso-start) to anneal between two nonzero
+# parameter sets. A term is annealed if either endpoint is nonzero.
 [measure]
 measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
 gamma = 0.25
 iso_weight = 0.3
+# gamma_start = 0.0
+# iso_start = 0.0
 
 [smc]
 schedule = "fixed"        # "fixed" (t-grid + ESS<ess_frac*N resample) or "adaptive"
