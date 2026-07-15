@@ -173,4 +173,102 @@
             @test !haskey(ap, "chain.run") # nothing stamped it
         end
     end
+
+    @testset "proposal names: aliases, single vs mixture, untagged fallback" begin
+        # every alias of the two builders resolves to its registered name
+        @test proposal_name(build_one_tree_cycle_walk(constraints)) == "one_tree_cycle_walk"
+        @test proposal_name(build_internal_forest_walk(constraints)) == "one_tree_cycle_walk"
+        @test proposal_name(build_two_tree_cycle_walk(constraints)) == "two_tree_cycle_walk"
+        @test proposal_name(build_lifted_tree_cycle_walk(constraints)) == "two_tree_cycle_walk"
+        @test proposal_name(build_cycle_walk(constraints)) == "two_tree_cycle_walk"
+
+        # an unregistered closure falls back to string(f)
+        untagged = (p, r; diagnostics=nothing) -> nothing
+        @test proposal_name(untagged) == string(untagged)
+
+        # describe_proposal on a single closure is a bare name; on a mixture, a vector
+        @test describe_proposal(build_one_tree_cycle_walk(constraints)) == "one_tree_cycle_walk"
+        desc = describe_proposal(proposal)
+        @test desc isa Vector
+        @test Set(d["proposal"] for d in desc) ==
+              Set(["two_tree_cycle_walk", "one_tree_cycle_walk"])
+        @test [d["weight"] for d in desc] == [0.5, 0.5]
+
+        # name_proposal! returns the closure unchanged and tags it
+        f = (p, r; diagnostics=nothing) -> nothing
+        @test name_proposal!(f, "my_move") === f
+        @test proposal_name(f) == "my_move"
+    end
+
+    @testset "ASMC AdaptiveTempering schedule metadata" begin
+        mktempdir() do dir
+            path = joinpath(dir, "adaptive.jsonl.gz")
+            p = fresh_partition(7)
+            m = make_measure()
+            sched = AdaptiveTempering(; ess_target=0.5)
+            w = Writer(m, constraints, p, path; weight_type=Float64)
+            run_annealed_smc!(p, proposal, m, sched, 8, 5,
+                              PCG.PCGStateOneseq(UInt64, 7);
+                              init_steps=5, writer=w, seed=321)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            sch = ap["chain.parameters"]["schedule"]
+            @test sch["kind"] == "adaptive"
+            @test sch["ess_target"] == 0.5
+            @test occursin("every step", sch["resampling"])
+        end
+    end
+
+    @testset "ASMC records non-zero annealing start (base) parameters" begin
+        mktempdir() do dir
+            path = joinpath(dir, "nonzero_base.jsonl.gz")
+            p = fresh_partition(8)
+            m = make_measure()
+            # a LinearPath ramping from a NON-zero base (γ=0.2, iso=0.1) to the target
+            scores, target_w = annealed_smc_scores_and_targets(m)
+            K = length(scores)
+            base_by_fn = Dict(get_log_spanning_forests => 0.2,
+                              get_isoperimetric_score => 0.1)
+            base_w = ntuple(k -> base_by_fn[scores[k]], K)
+            path_fn = LinearPath{K}(t -> ntuple(k -> base_w[k] +
+                                                     t * (target_w[k] - base_w[k]), K))
+            sched = FixedSchedule(range(0.0, 1.0; length=6); ess_frac=0.5)
+            w = Writer(m, constraints, p, path; weight_type=Float64)
+            run_annealed_smc!(p, proposal, m, sched, 8, 5,
+                              PCG.PCGStateOneseq(UInt64, 8);
+                              path=path_fn, init_steps=5, writer=w, seed=654)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            params = ap["chain.parameters"]
+            # weights.base reflects path(0) = the non-zero start, not zeros
+            @test params["weights.base"]["get_log_spanning_forests"] == 0.2
+            @test params["weights.base"]["get_isoperimetric_score"] == 0.1
+            @test params["weights.target"]["get_log_spanning_forests"] == 0.7
+            @test params["weights.target"]["get_isoperimetric_score"] == 0.3
+        end
+    end
+
+    @testset "header is written exactly once (no duplicate preamble)" begin
+        mktempdir() do dir
+            path = joinpath(dir, "once.jsonl.gz")
+            p = fresh_partition(9)
+            m = make_measure()
+            w = Writer(m, constraints, p, path)
+            # a run that writes several maps, so the header + many map lines coexist
+            run_metropolis_hastings!(p, proposal, m, 500,
+                                     PCG.PCGStateOneseq(UInt64, 9);
+                                     writer=w, output_freq=100, seed=42)
+            close_writer(w)
+
+            io = AIO.smartOpen(path, "r")
+            lines = readlines(io)
+            close(io)
+            banner = count(l -> occursin("This is an Atlas for Redistricting Maps", l),
+                           lines)
+            @test banner == 1               # exactly one header preamble, never duplicated
+            @test length(lines) > 3         # header (3 lines) plus at least one map
+        end
+    end
 end
