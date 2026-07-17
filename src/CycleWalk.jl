@@ -4,7 +4,8 @@ using SimpleWeightedGraphs
 using DataStructures:
     IntDisjointSet,
     in_same_set,
-    SortedDict
+    SortedDict,
+    OrderedDict
 using Graphs
 using RandomNumbers
 using LinearAlgebra
@@ -120,6 +121,7 @@ export AbstractGraph,
     close_writer,
     push_writer!,
     push_path_writer!,
+    stamp_execution_metadata!,
 
     # mcmc
     run_metropolis_hastings!,

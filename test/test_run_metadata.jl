@@ -250,6 +250,76 @@
         end
     end
 
+    @testset "execution metadata: user, script_name, and script (last key)" begin
+        mktempdir() do dir
+            # default include_script=true stamps user + script_name + full source
+            path = joinpath(dir, "exec.jsonl.gz")
+            p = fresh_partition(10)
+            m = make_measure()
+            w = Writer(m, constraints, p, path;
+                       additional_parameters=Dict{String, Any}("popdev" => 0.1))
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 10);
+                                     writer=w, seed=7)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test haskey(ap, "user")
+            # under `] test`/runtests.jl a script IS running, so these are present
+            if !isempty(Base.PROGRAM_FILE)
+                @test haskey(ap, "script_name")
+                @test ap["script_name"] == basename(Base.PROGRAM_FILE)
+                @test haskey(ap, "script")
+                @test ap["script"] == read(Base.PROGRAM_FILE, String)
+
+                # "script" must be the header's final key (raw third line ordering)
+                io = AIO.smartOpen(path, "r"); lines = readlines(io); close(io)
+                line3 = lines[3]
+                spos = first(findfirst("\"script\":", line3))
+                for k in ("energies", "districts", "user", "script_name",
+                          "chain.run", "chain.parameters", "seed", "popdev")
+                    @test first(findfirst("\"$k\":", line3)) < spos
+                end
+            end
+        end
+    end
+
+    @testset "include_script=false omits the embedded source" begin
+        mktempdir() do dir
+            path = joinpath(dir, "noscript.jsonl.gz")
+            p = fresh_partition(11)
+            m = make_measure()
+            w = Writer(m, constraints, p, path; include_script=false)
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 11);
+                                     writer=w, seed=8)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test haskey(ap, "user")             # user is always stamped
+            @test !haskey(ap, "script")          # but the source blob is omitted
+        end
+    end
+
+    @testset "user additional_parameters override execution metadata" begin
+        mktempdir() do dir
+            path = joinpath(dir, "exec_override.jsonl.gz")
+            p = fresh_partition(12)
+            m = make_measure()
+            w = Writer(m, constraints, p, path;
+                       additional_parameters=Dict{String, Any}(
+                           "user" => "override-user", "script" => "my own script"))
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 12);
+                                     writer=w, seed=9)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test ap["user"] == "override-user"  # user's key wins
+            @test ap["script"] == "my own script"
+        end
+    end
+
     @testset "header is written exactly once (no duplicate preamble)" begin
         mktempdir() do dir
             path = joinpath(dir, "once.jsonl.gz")
