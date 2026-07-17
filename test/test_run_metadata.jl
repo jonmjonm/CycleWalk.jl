@@ -284,6 +284,51 @@
         end
     end
 
+    @testset "real_name and user_full_name execution metadata" begin
+        # real_name() is a best-effort, environment-dependent lookup: it must
+        # always return a String and never raise, but its value (and whether
+        # it is non-empty) depends on the OS user database.
+        name = CycleWalk.real_name()
+        @test name isa AbstractString
+
+        mktempdir() do dir
+            path = joinpath(dir, "fullname.jsonl.gz")
+            p = fresh_partition(20)
+            m = make_measure()
+            w = Writer(m, constraints, p, path; include_script=false)
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 20);
+                                     writer=w, seed=20)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            if isempty(name)
+                # nothing to stamp -> key is omitted rather than blank
+                @test !haskey(ap, "user_full_name")
+            else
+                @test ap["user_full_name"] == name
+            end
+        end
+    end
+
+    @testset "user_full_name additional_parameter wins over real_name" begin
+        mktempdir() do dir
+            path = joinpath(dir, "fullname_override.jsonl.gz")
+            p = fresh_partition(21)
+            m = make_measure()
+            w = Writer(m, constraints, p, path; include_script=false,
+                       additional_parameters=Dict{String, Any}(
+                           "user_full_name" => "Ada Lovelace"))
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 21);
+                                     writer=w, seed=21)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test ap["user_full_name"] == "Ada Lovelace"
+        end
+    end
+
     @testset "include_script=false omits the embedded source" begin
         mktempdir() do dir
             path = joinpath(dir, "noscript.jsonl.gz")

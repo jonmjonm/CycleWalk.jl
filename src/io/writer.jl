@@ -173,10 +173,50 @@ function write_header!(writer::Writer)
 end
 
 """
+    real_name() -> String
+
+Best-effort lookup of the full ("real") name of the OS user running this process,
+from the OS user database rather than the environment. Returns an empty string when
+no full name is available (a common case on servers, containers, and CI, where the
+field is unset). Platform sources:
+
+- macOS: `id -F` (the Directory Services full name).
+- Linux: the first comma-separated component of the GECOS field of the `getent passwd`
+  entry (extra office/phone components are dropped).
+- Windows: the account's `FullName` via WMI.
+
+The name is free-form, user/admin-set text — fine for provenance labeling, but not an
+authenticated identity. Any failure (missing tool, empty database entry) is swallowed
+and yields `""`.
+"""
+function real_name()
+    try
+        if Sys.isapple()
+            return strip(read(`id -F`, String))
+        elseif Sys.islinux()
+            user = get(ENV, "USER", "")
+            isempty(user) && return ""
+            line = strip(read(`getent passwd $user`, String))
+            fields = split(line, ':')
+            length(fields) < 5 && return ""
+            return strip(split(fields[5], ',')[1])
+        elseif Sys.iswindows()
+            name = get(ENV, "USERNAME", "")
+            isempty(name) && return ""
+            cmd = "(Get-CimInstance Win32_UserAccount -Filter \"Name='$name'\").FullName"
+            return strip(read(`powershell -NoProfile -Command $cmd`, String))
+        end
+    catch
+    end
+    return ""
+end
+
+"""
     stamp_execution_metadata!(writer; include_script=true)
 
 Stamp who and what is producing this Atlas into the header's `atlasParam`: the running
-`"user"` (from `ENV["USER"]`/`ENV["USERNAME"]`) and, when a script is being run
+`"user"` (from `ENV["USER"]`/`ENV["USERNAME"]`), the `"user_full_name"` (from
+[`real_name`](@ref), omitted when unavailable), and, when a script is being run
 (`PROGRAM_FILE` is non-empty), its `"script_name"`. When `include_script=true` (the
 default) the executing script's full source is captured and, by
 [`write_header!`](@ref), appended as the header's **last** key under `"script"`; pass
@@ -190,6 +230,10 @@ function stamp_execution_metadata!(writer::Writer; include_script::Bool=true)
     ap = writer.atlas.atlasParam
     haskey(ap, "user") ||
         (ap["user"] = get(ENV, "USER", get(ENV, "USERNAME", "unknown")))
+    if !haskey(ap, "user_full_name")
+        name = real_name()
+        isempty(name) || (ap["user_full_name"] = name)
+    end
     if !isempty(PROGRAM_FILE)
         haskey(ap, "script_name") || (ap["script_name"] = basename(PROGRAM_FILE))
         if include_script && !haskey(ap, "script") && isfile(PROGRAM_FILE)

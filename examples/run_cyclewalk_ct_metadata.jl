@@ -116,6 +116,11 @@ close_writer(writer) # close atlas
 println("\n--- Atlas header ---")
 open(`gzip -dc $output_file_path`) do io
     lines = collect(Iterators.take(eachline(io), 3))
+    # Drain the rest of gzip's output. We only need the first 3 lines, but if we
+    # close the pipe now gzip keeps writing the remainder into a reader-less pipe
+    # and dies with SIGPIPE (broken pipe / EPIPE), which Julia raises as an error.
+    # Consuming the rest lets gzip finish and exit cleanly.
+    read(io)
     println(lines[1])   # format banner
     println(lines[2])   # header record (description, date, types)
     keys3 = [m.captures[1] for m in eachmatch(r"\"([^\"]+)\":", lines[3])]
