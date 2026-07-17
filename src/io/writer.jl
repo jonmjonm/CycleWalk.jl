@@ -1,5 +1,10 @@
 
-AtlasParam=Dict{String, Any}
+# AtlasParam is insertion-ordered (OrderedDict) so the header's third line
+# serializes its keys in a stable, deterministic order. This lets execution
+# metadata such as the full "script" blob be appended last (see
+# [`stamp_execution_metadata!`](@ref) and [`write_header!`](@ref)). MapParam stays a
+# plain Dict; per-map key order is irrelevant.
+AtlasParam=OrderedDict{String, Any}
 MapParam=Dict{String, Any}
 
 """
@@ -31,7 +36,10 @@ values; `output_districting` selects whether each map records the full node→di
 assignment; `node_map`/`node_field` describe how nodes are keyed in the output.
 `path_recorders`/`path_target_points` configure per-sample annealing-path recording for
 annealed importance sampling (see [`push_path_writer!`](@ref)); an empty
-`path_recorders` (the default) records nothing and adds no cost.
+`path_recorders` (the default) records nothing and adds no cost. `script_text` holds the
+executing script's source (see [`stamp_execution_metadata!`](@ref)), deferred so
+[`write_header!`](@ref) can append it as the header's last key, or `nothing` when script
+embedding is disabled or no script is running.
 """
 mutable struct Writer
     atlas::Atlas{AtlasParam}
@@ -43,6 +51,7 @@ mutable struct Writer
     path_recorders::Vector{PathRecorder}
     path_target_points::Int
     header_written::Bool
+    script_text::Union{String, Nothing}
 end
 
 """
@@ -58,6 +67,12 @@ close with [`close_writer`](@ref). `weight_type` is the type of each map's sampl
 weight, recorded in the Atlas header: the default `Int64` suits ordinary MCMC runs
 (every map has weight 1); pass `Float64` when maps carry real-valued weights, as in
 [`run_annealed_importance_sampling!`](@ref).
+
+Execution metadata is also stamped automatically (see
+[`stamp_execution_metadata!`](@ref)): the running `"user"`, the `"script_name"`, and —
+when `include_script=true` (the default) — the full source of the executing script under
+`"script"`, appended as the header's final key. Pass `include_script=false` to omit the
+embedded source.
 """
 function Writer(
     measure::Measure,
@@ -70,7 +85,8 @@ function Writer(
     io_mode::String="w",
     additional_parameters::Dict{String, Any}=Dict{String,Any}(),
     weight_type::DataType=Int64,
-    path_target_points::Int=50
+    path_target_points::Int=50,
+    include_script::Bool=true
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -122,9 +138,12 @@ function Writer(
 
     node_map = get_node_map(partition.node_col, partition)
 
-    return Writer(atlas, MapParam(), map_output_data, output_districting,
-                  node_map, partition.node_col,
-                  PathRecorder[], path_target_points, false)#, proposal_diagnostics)
+    writer = Writer(atlas, MapParam(), map_output_data, output_districting,
+                    node_map, partition.node_col,
+                    PathRecorder[], path_target_points, false,
+                    nothing)#, proposal_diagnostics)
+    stamp_execution_metadata!(writer; include_script=include_script)
+    return writer
 end
 
 """
@@ -138,12 +157,50 @@ is safe to call from every map-writing entry point.
 """
 function write_header!(writer::Writer)
     writer.header_written && return
+    # Append the captured script source as the header's final key, right before
+    # serialization, so it lands last on the third line regardless of any run
+    # metadata stamped in between (AtlasParam is an OrderedDict). A user-supplied
+    # `additional_parameters["script"]` keeps its own position and wins.
+    if writer.script_text !== nothing && !haskey(writer.atlas.atlasParam, "script")
+        writer.atlas.atlasParam["script"] = writer.script_text
+    end
     atlasHeader = AtlasHeader(writer.atlas.description, writer.atlas.date,
                               AtlasParam, MapParam;
                               weightType=writer.atlas.weightType)
     newAtlas(writer.atlas.io, atlasHeader, writer.atlas.atlasParam)
     writer.header_written = true
     return
+end
+
+"""
+    stamp_execution_metadata!(writer; include_script=true)
+
+Stamp who and what is producing this Atlas into the header's `atlasParam`: the running
+`"user"` (from `ENV["USER"]`/`ENV["USERNAME"]`) and, when a script is being run
+(`PROGRAM_FILE` is non-empty), its `"script_name"`. When `include_script=true` (the
+default) the executing script's full source is captured and, by
+[`write_header!`](@ref), appended as the header's **last** key under `"script"`; pass
+`include_script=false` to omit the embedded source. Called automatically by the
+[`Writer`](@ref) constructor, but also safe to call by hand on an existing writer before
+its header is written. Each field is set only if absent, so a user's
+`additional_parameters` win; a no-op in the REPL for the script fields (no
+`PROGRAM_FILE`), and an unreadable script is skipped rather than raised.
+"""
+function stamp_execution_metadata!(writer::Writer; include_script::Bool=true)
+    ap = writer.atlas.atlasParam
+    haskey(ap, "user") ||
+        (ap["user"] = get(ENV, "USER", get(ENV, "USERNAME", "unknown")))
+    if !isempty(PROGRAM_FILE)
+        haskey(ap, "script_name") || (ap["script_name"] = basename(PROGRAM_FILE))
+        if include_script && !haskey(ap, "script") && isfile(PROGRAM_FILE)
+            try
+                writer.script_text = read(PROGRAM_FILE, String)
+            catch
+                writer.script_text = nothing
+            end
+        end
+    end
+    return writer
 end
 
 """
