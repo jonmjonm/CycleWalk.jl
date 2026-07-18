@@ -137,6 +137,29 @@ function get_log_spanning_trees(
 end
 
 """
+    get_log_spanning_trees(node_to_dist, graph::BaseGraph, num_dists)::Vector{Float64}
+
+Partition-free per-district log spanning-tree counts, computed straight from a
+node-to-district assignment and the base graph — no `LinkCutPartition`, and therefore
+no random spanning tree. Applies the low-level kernel
+[`get_log_spanning_trees(node_to_dist, simple_graph, di)`](@ref) to each district over
+`graph.simple_graph`. The result is indexed by `node_to_dist`'s own district numbering.
+
+This is the uniform `(node_to_dist, graph::BaseGraph, num_dists)` signature shared with
+the other partition-free writers, so a caller can discover the fast path by method
+existence and fall back to the `LinkCutPartition` method otherwise. Intended for
+scoring a stored districting after the fact (e.g. recomputing an atlas's map data).
+"""
+function get_log_spanning_trees(
+    node_to_dist::Vector{Int},
+    graph::BaseGraph,
+    num_dists::Int,
+)::Vector{Float64}
+    sg = graph.simple_graph
+    return Float64[get_log_spanning_trees(node_to_dist, sg, di) for di in 1:num_dists]
+end
+
+"""
     get_log_spanning_forests(partition, districts=...; update=nothing)::Float64
 
 Sum of [`get_log_spanning_trees`](@ref) over `districts` — the log number of spanning
@@ -150,6 +173,23 @@ function get_log_spanning_forests(
     update::Union{Update{T}, Nothing}=nothing
 )::Float64 where T <: Int
     return sum(get_log_spanning_trees(partition, districts, update=update))
+end
+
+"""
+    get_log_spanning_forests(node_to_dist, graph::BaseGraph, num_dists)::Float64
+
+Partition-free log spanning-FOREST count: the sum over districts of the partition-free
+[`get_log_spanning_trees(node_to_dist, graph, num_dists)`](@ref). Shares the uniform
+`(node_to_dist, graph::BaseGraph, num_dists)` signature so it is discoverable as a fast
+path (with the `LinkCutPartition` method as the fallback). No partition or spanning
+tree is built.
+"""
+function get_log_spanning_forests(
+    node_to_dist::Vector{Int},
+    graph::BaseGraph,
+    num_dists::Int,
+)::Float64
+    return sum(get_log_spanning_trees(node_to_dist, graph, num_dists))
 end
 
 """
