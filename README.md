@@ -19,6 +19,55 @@ It groups the exported functions and types by their role in a typical run
 (building a graph and partition, defining constraints and a target measure,
 configuring proposals, running the sampler, and writing output).
 
+## Recording Observables with `push_writer!`
+
+Per-step observables are attached to the output with `push_writer!`:
+
+```julia
+push_writer!(writer, get_log_spanning_trees)              # keyed by the function name
+push_writer!(writer, get_isoperimetric_scores; desc="pp") # or with a custom key
+```
+
+Each registered function is called once per recorded sample as `f(partition)` (where
+`partition` is the working `LinkCutPartition`), and its return value is written into that
+sample's Atlas map under `desc` (defaulting to the function's name). The TOML example
+scripts resolve these by name, e.g. `push_writer!(writer, getfield(CycleWalk, Symbol(stat)))`.
+
+Any exported observable with a method taking just a `LinkCutPartition` (all other
+arguments optional or keyword) can be pushed directly. Note the difference in output shape:
+some return a **per-district vector**, others a **plan-wide scalar**.
+
+**Per-district vectors** (`Vector{Float64}`, one entry per district):
+
+| Function | Meaning |
+|---|---|
+| `get_log_spanning_trees` | log number of spanning trees of each district |
+| `get_isoperimetric_scores` | per-district Polsby-Popper compactness |
+| `get_average_degrees` | mean node degree in each district's spanning tree |
+| `get_degree_distributions` | degree histogram per district |
+| `get_neighbor_lists` | adjacency lists per district |
+| `get_diameters` | spanning-tree diameter per district |
+| `get_center_moments` | tree-center moment per district (keyword `p=1`) |
+| `get_center_leaves_moments` | center-to-leaves moment per district (keyword `p=1`) |
+
+**Plan-wide scalars** (`Float64`):
+
+| Function | Meaning |
+|---|---|
+| `get_log_spanning_forests` | sum of the per-district log spanning-tree counts |
+| `get_isoperimetric_score` | aggregate isoperimetric (compactness) score |
+| `get_log_linking_edges` | log number of edges linking districts |
+| `get_log_district_trees` | log district-tree count |
+| `get_cut_edge_sum` | total number of cut (cross-district) edges (keyword `column="connections"`) |
+
+Some exported functions are **not** drop-in and need a closure or a different partition
+type:
+
+| Function | Why | How to use |
+|---|---|---|
+| `get_log_energy` | requires a `Measure` as a second positional argument | `push_writer!(writer, p -> get_log_energy(p, measure); desc="log_energy")` |
+| `get_node_count` / `get_node_counts` | operate on a `MultiLevelGraph` / `MultiLevelPartition`, not a `LinkCutPartition` | use on a MultiLevel writer path |
+
 ## Metropolized Cycle Walk Algorithm
 
 The basic Cycle Walk produces $d$-tree spanning forests where each of the $d$ spanning trees is approximately balanced in the sense that the total population of each tree is approximately balanced.
