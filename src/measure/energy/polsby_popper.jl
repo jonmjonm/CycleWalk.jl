@@ -178,9 +178,55 @@ function get_isoperimetric_scores(
         isos[ii] = (perimeters[di]^2)/areas[di]
         # @show di, areas[di], iso_data.areas_update[di], iso_data.areas[di]
         # @show di, perimeters[di], iso_data.perimeters_update[di], iso_data.perimeters[di]
-    end    
+    end
 
     return isos
+end
+
+"""
+    get_isoperimetric_scores(node_to_dist, graph::BaseGraph, num_dists)::Vector{Float64}
+
+Partition-free isoperimetric (Polsby–Popper) scores `perimeter² / area` per district,
+computed from just a node-to-district assignment and the base graph — no
+`LinkCutPartition`, and therefore no random spanning tree. This is the same
+quantity as [`set_areas_and_perimeters!`](@ref) plus the score formula, but the
+cross-district edges are derived directly (an edge contributes to a boundary iff its
+endpoints lie in different districts) instead of being read from a partition's cached
+`cross_district_edges`.
+
+Intended for scoring a stored districting after the fact (e.g. recomputing an atlas's
+map data), where the spanning tree a `LinkCutPartition` draws is pure overhead.
+`node_to_dist[ni]` is the district (`1:num_dists`) of node `ni`; the returned vector
+is indexed by that same district numbering. Requires `graph`'s `area_col`,
+`node_border_col` and `edge_perimeter_col` to be set (as isoperimetric scoring always
+does). Matches the `LinkCutPartition` method's values exactly.
+"""
+function get_isoperimetric_scores(
+    node_to_dist::Vector{Int},
+    graph::BaseGraph,
+    num_dists::Int,
+)::Vector{Float64}
+    areas = zeros(Float64, num_dists)
+    perimeters = zeros(Float64, num_dists)
+    area_col = graph.area_col
+    border_len_col = graph.node_border_col
+    edge_perimeter_col = graph.edge_perimeter_col
+
+    for ni = 1:length(node_to_dist)
+        di = node_to_dist[ni]
+        areas[di] += graph.node_attributes[ni][area_col]
+        perimeters[di] += graph.node_attributes[ni][border_len_col]
+    end
+    for edge in edges(graph.simple_graph)
+        u, v = src(edge), dst(edge)
+        du, dv = node_to_dist[u], node_to_dist[v]
+        du == dv && continue
+        perim = graph.edge_attributes[Set([u, v])][edge_perimeter_col]
+        perimeters[du] += perim
+        perimeters[dv] += perim
+    end
+
+    return Float64[perimeters[di]^2 / areas[di] for di in 1:num_dists]
 end
 
 """
