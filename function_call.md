@@ -413,7 +413,9 @@ Writer(
     io_mode::String="w",
     additional_parameters::Dict{String,Any}=Dict{String,Any}(),
     weight_type::DataType=Int64,
-    path_target_points::Int=50
+    path_target_points::Int=50,
+    include_script::Bool=true,
+    config_file::Union{String,Nothing}=nothing
 )::Writer
 ```
 
@@ -425,6 +427,16 @@ the default `Int64` suits ordinary MCMC runs (every map has weight 1); pass
 [`run_annealed_importance_sampling!`](#run_annealed_importance_sampling).
 `path_target_points` sets the approximate number of points recorded per sample by
 [`push_path_writer!`](#push_path_writer).
+
+Execution metadata is stamped automatically: the running `"user"`, the
+`"script_name"`, and — when `include_script=true` (the default) — the full source
+of the executing script under `"script"`, appended as the header's final key.
+Pass `include_script=false` to omit the embedded source.
+
+If `config_file` names an existing file, its full contents are read and appended
+under `"toml_config"` as the header's very last key — after `"script"` — so it
+can never be overwritten by other header data. If `config_file` is `nothing` or
+doesn't point to an existing file, this is silently skipped.
 
 ### `push_writer!`
 
