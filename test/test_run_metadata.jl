@@ -346,6 +346,96 @@
         end
     end
 
+    @testset "config_file embeds toml_config as the header's final key" begin
+        mktempdir() do dir
+            toml_path = joinpath(dir, "config.toml")
+            toml_text = "[plans]\nnum_dists = 4\npop_dev = 0.02\n"
+            write(toml_path, toml_text)
+
+            path = joinpath(dir, "config.jsonl.gz")
+            p = fresh_partition(13)
+            m = make_measure()
+            w = Writer(m, constraints, p, path;
+                       additional_parameters=Dict{String, Any}("popdev" => 0.02),
+                       config_file=toml_path)
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 13);
+                                     writer=w, seed=13)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test haskey(ap, "toml_config")
+            @test ap["toml_config"] == toml_text
+
+            # "toml_config" must be the header's absolute final key, after "script"
+            # (when a script is running) and after everything else.
+            io = AIO.smartOpen(path, "r"); lines = readlines(io); close(io)
+            line3 = lines[3]
+            cpos = first(findfirst("\"toml_config\":", line3))
+            other_keys = ["energies", "districts", "user", "chain.run",
+                          "chain.parameters", "seed", "popdev"]
+            isempty(Base.PROGRAM_FILE) || push!(other_keys, "script")
+            for k in other_keys
+                @test first(findfirst("\"$k\":", line3)) < cpos
+            end
+        end
+    end
+
+    @testset "no config_file => no toml_config key" begin
+        mktempdir() do dir
+            path = joinpath(dir, "noconfig.jsonl.gz")
+            p = fresh_partition(14)
+            m = make_measure()
+            w = Writer(m, constraints, p, path)   # config_file defaults to nothing
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 14);
+                                     writer=w, seed=14)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test !haskey(ap, "toml_config")
+        end
+    end
+
+    @testset "nonexistent config_file is silently skipped" begin
+        mktempdir() do dir
+            path = joinpath(dir, "missingconfig.jsonl.gz")
+            p = fresh_partition(15)
+            m = make_measure()
+            w = Writer(m, constraints, p, path;
+                       config_file=joinpath(dir, "does_not_exist.toml"))
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 15);
+                                     writer=w, seed=15)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test !haskey(ap, "toml_config")
+        end
+    end
+
+    @testset "user additional_parameters win over config_file" begin
+        mktempdir() do dir
+            toml_path = joinpath(dir, "config2.toml")
+            write(toml_path, "[plans]\nnum_dists = 4\n")
+
+            path = joinpath(dir, "config_override.jsonl.gz")
+            p = fresh_partition(16)
+            m = make_measure()
+            w = Writer(m, constraints, p, path;
+                       config_file=toml_path,
+                       additional_parameters=Dict{String, Any}(
+                           "toml_config" => "my own config"))
+            run_metropolis_hastings!(p, proposal, m, 100,
+                                     PCG.PCGStateOneseq(UInt64, 16);
+                                     writer=w, seed=16)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test ap["toml_config"] == "my own config"
+        end
+    end
+
     @testset "user additional_parameters override execution metadata" begin
         mktempdir() do dir
             path = joinpath(dir, "exec_override.jsonl.gz")
