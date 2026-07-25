@@ -130,7 +130,8 @@ ad_param = Dict{String, Any}("popdev" => pop_dev)
 writer = Writer(measure, constraints, partition, output_file_path;
                 additional_parameters=ad_param, weight_type=Float64,
                 output_districting=output_districting,
-                io_mode=io_mode, description=description)
+                io_mode=io_mode, description=description,
+                config_file=ARGS[1])
 for stat in writer_stats
     push_writer!(writer, getfield(CycleWalk, Symbol(stat)))
 end

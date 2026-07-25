@@ -157,7 +157,7 @@ mkpath(outdir)
 output_file_path = joinpath(outdir, atlasNameBase * tag * ".jsonl" * compress)
 writer = Writer(measure, constraints, partition, output_file_path;
                 weight_type=Float64, output_districting=output_districting,
-                description=description)
+                description=description, config_file=args[:toml_config_file])
 for stat in writer_stats
     push_writer!(writer, getfield(CycleWalk, Symbol(stat)))
 end
