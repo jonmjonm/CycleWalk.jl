@@ -39,7 +39,10 @@ annealed importance sampling (see [`push_path_writer!`](@ref)); an empty
 `path_recorders` (the default) records nothing and adds no cost. `script_text` holds the
 executing script's source (see [`stamp_execution_metadata!`](@ref)), deferred so
 [`write_header!`](@ref) can append it as the header's last key, or `nothing` when script
-embedding is disabled or no script is running.
+embedding is disabled or no script is running. `config_text` holds the raw contents of a
+run's TOML config file (see the `config_file` argument of [`Writer`](@ref)), deferred so
+[`write_header!`](@ref) can append it as the header's very last key (after `script`), or
+`nothing` when no config file was given.
 """
 mutable struct Writer
     atlas::Atlas{AtlasParam}
@@ -52,6 +55,7 @@ mutable struct Writer
     path_target_points::Int
     header_written::Bool
     script_text::Union{String, Nothing}
+    config_text::Union{String, Nothing}
 end
 
 """
@@ -73,6 +77,11 @@ Execution metadata is also stamped automatically (see
 when `include_script=true` (the default) — the full source of the executing script under
 `"script"`, appended as the header's final key. Pass `include_script=false` to omit the
 embedded source.
+
+If `config_file` names an existing file, its full contents are read and appended, under
+`"toml_config"`, as the header's very last key — after `"script"` — so it can never be
+overwritten by other header data. If `config_file` is `nothing` or does not point to an
+existing file, this is silently skipped.
 """
 function Writer(
     measure::Measure,
@@ -86,7 +95,8 @@ function Writer(
     additional_parameters::Dict{String, Any}=Dict{String,Any}(),
     weight_type::DataType=Int64,
     path_target_points::Int=50,
-    include_script::Bool=true
+    include_script::Bool=true,
+    config_file::Union{String, Nothing}=nothing
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -141,8 +151,15 @@ function Writer(
     writer = Writer(atlas, MapParam(), map_output_data, output_districting,
                     node_map, partition.node_col,
                     PathRecorder[], path_target_points, false,
-                    nothing)#, proposal_diagnostics)
+                    nothing, nothing)#, proposal_diagnostics)
     stamp_execution_metadata!(writer; include_script=include_script)
+    if config_file !== nothing && isfile(config_file)
+        try
+            writer.config_text = read(config_file, String)
+        catch
+            writer.config_text = nothing
+        end
+    end
     return writer
 end
 
@@ -163,6 +180,13 @@ function write_header!(writer::Writer)
     # `additional_parameters["script"]` keeps its own position and wins.
     if writer.script_text !== nothing && !haskey(writer.atlas.atlasParam, "script")
         writer.atlas.atlasParam["script"] = writer.script_text
+    end
+    # Append the TOML config's raw contents last of all — after "script" — so it can
+    # never be overwritten by (and never overwrites) any other header data. Skipped
+    # entirely when no config file was given or read (see the `config_file` argument
+    # of `Writer`).
+    if writer.config_text !== nothing && !haskey(writer.atlas.atlasParam, "toml_config")
+        writer.atlas.atlasParam["toml_config"] = writer.config_text
     end
     atlasHeader = AtlasHeader(writer.atlas.description, writer.atlas.date,
                               AtlasParam, MapParam;

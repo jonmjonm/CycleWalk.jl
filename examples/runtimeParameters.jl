@@ -64,11 +64,6 @@ steps = Int(ceil(cycle_walk_steps/two_cycle_walk_frac))
 outfreq = Int(floor(cycle_walk_out_freq/two_cycle_walk_frac))
 
 
-#data to be added to atlas header
-ad_param = Dict{String, Any}(
-    "popdev" => pop_dev
-)
-
 atlasName = atlasNameBase*"_thread"*string(thread_id)
 atlasName *= "_cyclewalkVS_2treeCycleWalk_"*string(two_cycle_walk_frac)
 if gamma > 0; atlasName *="_gamma"*string(gamma) end
@@ -87,3 +82,17 @@ mkpath(dirname(output_file_path))
 pctGraphPath = joinpath(map_directory... , map_file)
 isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 @show pctGraphPath
+
+#data to be added to atlas header
+ad_param = Dict{String, Any}(
+    "popdev"            => pop_dev,
+    "toml_config_file"  => toml_config_file,
+    "map_file"          => pctGraphPath,
+    "pop_col"           => pop_col,
+    "geo_units"         => geo_units,
+    "cycle_walk_steps"  => cycle_walk_steps,
+    "cycle_walk_out_freq" => cycle_walk_out_freq,
+    "rng_seed_base"     => rng_seed_base,
+    "blas_threads"      => blas_threads,
+    "run_diagnostics"   => params["run"]["run_diagnostics"],
+)

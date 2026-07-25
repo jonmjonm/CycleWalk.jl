@@ -54,7 +54,8 @@ end
 writer = Writer(measure, constraints, partition, output_file_path;
                 additional_parameters=ad_param,
                 output_districting=output_districting,
-                io_mode=io_mode, description=description)
+                io_mode=io_mode, description=description,
+                config_file=toml_config_file)
 for stat in writer_stats
     fnct = getfield(CycleWalk, Symbol(stat))
     push_writer!(writer, fnct)
