@@ -161,6 +161,75 @@ function LinkCutPartition(
 end
 
 """
+    relabel_districts!(partition, node_to_district)
+
+Renumber `partition`'s districts so that every node carries the district index it has
+in `node_to_district` (a `Dict` from each node's one-tuple id to its district — the
+form an Atlas records, and the form [`flatten_assignment`](@ref) returns).
+
+The `LinkCutPartition` constructors number districts by the order in which their trees
+are first encountered in the link-cut tree, which has nothing to do with the labels of
+the assignment a plan was built from. That is immaterial to sampling — the measure and
+the constraints do not care what a district is called — but it matters when a recorded
+plan is reloaded and the new samples are meant to line up with the old ones, as when
+extending an existing Atlas (see `examples/run_cyclewalk_extend.jl`). Relabelling makes
+district `d` after the reload the same district `d` that was written out.
+
+`node_to_district` must describe the same plan `partition` already holds, differing
+only in its labels; anything else throws, since the partition's forest cannot be
+changed by renaming. Any cached `energy_data` is dropped, since it is keyed by
+district; it is rebuilt from the partition the next time an energy is evaluated.
+"""
+function relabel_districts!(
+    partition::LinkCutPartition,
+    node_to_district::AbstractDict{<:Tuple{Vararg{String}}, <:Integer}
+)
+    graph = partition.graph
+    num_dists = partition.num_dists
+
+    # perm[current label] = target label, read off node by node
+    perm = zeros(Int, num_dists)
+    for ni = 1:graph.num_nodes
+        key = (graph.node_attributes[ni][partition.node_col],)
+        haskey(node_to_district, key) ||
+            throw(ArgumentError("node $key is missing from the assignment"))
+        target = node_to_district[key]
+        (1 <= target <= num_dists) ||
+            throw(ArgumentError("district $target of node $key is out of range " *
+                                "1:$num_dists"))
+        cur = partition.node_to_dist[ni]
+        if perm[cur] == 0
+            perm[cur] = target
+        elseif perm[cur] != target
+            throw(ArgumentError("the assignment is not a relabelling of the " *
+                                "partition: district $cur holds nodes assigned to " *
+                                "both $(perm[cur]) and $target"))
+        end
+    end
+    length(Set(perm)) == num_dists ||
+        throw(ArgumentError("the assignment is not a relabelling of the partition: " *
+                            "its districts do not map one-to-one"))
+
+    old_roots = copy(partition.district_roots)
+    for cur = 1:num_dists
+        partition.district_roots[perm[cur]] = old_roots[cur]
+    end
+    empty!(partition.roots_to_district)
+    for di = 1:num_dists
+        partition.roots_to_district[partition.district_roots[di]] = di
+    end
+    # Rebuild the derived state from the (now renumbered) roots rather than permuting
+    # it in place: both are keyed by district, and recomputing once at load time is
+    # cheap next to getting the permutation of a Dict's keys subtly wrong.
+    assign_district_map!(partition)
+    partition.node_to_dist_update .= partition.node_to_dist
+    empty!(partition.cross_district_edges)
+    find_cross_district_edges!(partition)
+    empty!(partition.energy_data)   # per-district caches; rebuilt lazily on next use
+    return partition
+end
+
+"""
     get_district_roots(lct)
 
 Scan every node of the link-cut tree `lct` and collect the distinct tree roots,

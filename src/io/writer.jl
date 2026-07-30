@@ -61,7 +61,8 @@ end
 """
     Writer(measure, constraints, partition, output_file_path; output_districting=true,
            description="", time_stamp=string(Dates.now()), io_mode="w",
-           additional_parameters=Dict{String,Any}(), weight_type=Int64)
+           additional_parameters=Dict{String,Any}(), weight_type=Int64,
+           write_header=true)
 
 Open `output_file_path` (`.jsonl` or `.jsonl.gz`) and write the Atlas header,
 recording the measure's energies and weights, the population bounds and constraint
@@ -82,6 +83,14 @@ If `config_file` names an existing file, its full contents are read and appended
 `"toml_config"`, as the header's very last key — after `"script"` — so it can never be
 overwritten by other header data. If `config_file` is `nothing` or does not point to an
 existing file, this is silently skipped.
+
+Pass `write_header=false` when appending maps to an Atlas that already carries a header
+(`io_mode="a"`): the header is then treated as already present and none is emitted, so
+the appended maps continue the existing file rather than embedding a second header
+block in its middle. The `atlasParam` assembled here is still built (and reachable as
+`writer.atlas.atlasParam`) but never reaches disk, so a run that appends cannot record
+anything about itself in the file's header — see `examples/run_cyclewalk_extend.jl`,
+which writes a sidecar lineage file in that mode.
 """
 function Writer(
     measure::Measure,
@@ -96,7 +105,8 @@ function Writer(
     weight_type::DataType=Int64,
     path_target_points::Int=50,
     include_script::Bool=true,
-    config_file::Union{String, Nothing}=nothing
+    config_file::Union{String, Nothing}=nothing,
+    write_header::Bool=true
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -148,9 +158,11 @@ function Writer(
 
     node_map = get_node_map(partition.node_col, partition)
 
+    # `header_written=true` up front (write_header=false) marks the header as already
+    # present in the file, which is what suppresses it for an append.
     writer = Writer(atlas, MapParam(), map_output_data, output_districting,
                     node_map, partition.node_col,
-                    PathRecorder[], path_target_points, false,
+                    PathRecorder[], path_target_points, !write_header,
                     nothing, nothing)#, proposal_diagnostics)
     stamp_execution_metadata!(writer; include_script=include_script)
     if config_file !== nothing && isfile(config_file)

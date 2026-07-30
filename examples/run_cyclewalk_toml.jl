@@ -38,17 +38,7 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(two_cycle_walk_frac, cycle_walk), 
             (1.0-two_cycle_walk_frac, internal_walk)]
 
-measure = Measure()
-for fnct_str in measure_scores
-    if fnct_str=="get_log_spanning_forests"
-        push_energy!(measure, get_log_spanning_forests, gamma) 
-    elseif fnct_str=="get_isoperimetric_score"
-        push_energy!(measure, get_isoperimetric_score, iso_weight)
-    else
-        fnct = getfield(CycleWalk, Symbol(fnct_str))
-        push_energy!(measure, fnct)
-    end
-end
+measure = build_measure(measure_scores, gamma, iso_weight)
 
 @show output_file_path
 writer = Writer(measure, constraints, partition, output_file_path;

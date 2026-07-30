@@ -161,6 +161,27 @@ LinkCutPartition(
 The first form is the one used in practice: it draws an initial partition that
 satisfies `constraints` and wraps it in a link/cut tree.
 
+### `relabel_districts!(partition, node_to_district)`
+
+Renumber `partition`'s districts so every node carries the district index it has in
+`node_to_district` — a `Dict` from each node's one-tuple id to its district, which is
+the form an Atlas map records.
+
+```julia
+relabel_districts!(
+    partition::LinkCutPartition,
+    node_to_district::AbstractDict{<:Tuple{Vararg{String}}, <:Integer}
+)::LinkCutPartition
+```
+
+The constructors number districts by the order their trees are first met in the
+link/cut tree, which has nothing to do with the labels of the assignment a plan was
+built from. That does not matter to sampling, but it does when a recorded plan is
+reloaded and the new samples should line up with the old — as when extending an
+existing Atlas (`examples/run_cyclewalk_extend.jl`). `node_to_district` must describe
+the same plan, differing only in labels; anything else throws an `ArgumentError`.
+Cached `energy_data` is dropped (it is keyed by district) and rebuilt lazily.
+
 ### Related re-exported types
 
 | Type | Description |
@@ -415,7 +436,8 @@ Writer(
     weight_type::DataType=Int64,
     path_target_points::Int=50,
     include_script::Bool=true,
-    config_file::Union{String,Nothing}=nothing
+    config_file::Union{String,Nothing}=nothing,
+    write_header::Bool=true
 )::Writer
 ```
 
@@ -437,6 +459,13 @@ If `config_file` names an existing file, its full contents are read and appended
 under `"toml_config"` as the header's very last key — after `"script"` — so it
 can never be overwritten by other header data. If `config_file` is `nothing` or
 doesn't point to an existing file, this is silently skipped.
+
+Pass `write_header=false` when appending maps to an Atlas that already carries a
+header (`io_mode="a"`): the header is treated as already present and none is
+emitted, so the appended maps continue the existing file rather than embedding a
+second header block in its middle. Nothing this run assembles reaches the file's
+header in that case — see `examples/run_cyclewalk_extend.jl`, which writes a
+sidecar lineage file when appending.
 
 ### `push_writer!`
 

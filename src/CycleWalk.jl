@@ -103,6 +103,7 @@ export AbstractGraph,
     # MaxHammingDistance,
     
     LinkCutPartition,
+    relabel_districts!,
 
     # Diagnostics
     RunDiagnostics,
@@ -122,6 +123,7 @@ export AbstractGraph,
     push_writer!,
     push_path_writer!,
     stamp_execution_metadata!,
+    write_header!,
 
     # mcmc
     run_metropolis_hastings!,
