@@ -368,13 +368,20 @@
             @test ap["toml_config"] == toml_text
 
             # "toml_config" must be the header's absolute final key, after "script"
-            # (when a script is running) and after everything else.
+            # and its includes (when a script is running) and after everything else.
             io = AIO.smartOpen(path, "r"); lines = readlines(io); close(io)
             line3 = lines[3]
             cpos = first(findfirst("\"toml_config\":", line3))
-            other_keys = ["energies", "districts", "user", "chain.run",
-                          "chain.parameters", "seed", "popdev"]
-            isempty(Base.PROGRAM_FILE) || push!(other_keys, "script")
+            other_keys = ["energies", "districts", "user", "julia_version",
+                          "chain.run", "chain.parameters", "seed", "popdev"]
+            if !isempty(Base.PROGRAM_FILE)
+                push!(other_keys, "script")
+                # the include keys are only present when there is something to record
+                for k in ("script_includes", "script_includes_unresolved",
+                          "script_includes_skipped")
+                    haskey(ap, k) && push!(other_keys, k)
+                end
+            end
             for k in other_keys
                 @test first(findfirst("\"$k\":", line3)) < cpos
             end

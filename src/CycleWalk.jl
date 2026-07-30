@@ -123,6 +123,7 @@ export AbstractGraph,
     push_writer!,
     push_path_writer!,
     stamp_execution_metadata!,
+    collect_included_sources,
     write_header!,
 
     # mcmc

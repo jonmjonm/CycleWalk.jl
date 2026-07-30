@@ -8,6 +8,26 @@ AtlasParam=OrderedDict{String, Any}
 MapParam=Dict{String, Any}
 
 """
+    MAX_INCLUDE_BYTES
+
+Default cap on how much `include`d source is embedded in an Atlas header (see
+[`collect_included_sources`](@ref)). The header is a single JSON line that every
+reader of the file parses, so a runner script that `include`s something large must
+not bloat every atlas it writes; source past this budget is listed by name under
+`"script_includes_skipped"` instead. Override per run with the `max_include_bytes`
+argument of [`Writer`](@ref).
+"""
+const MAX_INCLUDE_BYTES = 1_000_000
+
+"""
+    MAX_INCLUDE_DEPTH
+
+Default cap on how deep a chain of `include`s is followed when embedding a script's
+sources in an Atlas header (see [`collect_included_sources`](@ref)).
+"""
+const MAX_INCLUDE_DEPTH = 8
+
+"""
     PathRecorder(desc, kind, f)
 
 One entry of a [`Writer`](@ref)'s annealing-path recorder list (see
@@ -39,7 +59,9 @@ annealed importance sampling (see [`push_path_writer!`](@ref)); an empty
 `path_recorders` (the default) records nothing and adds no cost. `script_text` holds the
 executing script's source (see [`stamp_execution_metadata!`](@ref)), deferred so
 [`write_header!`](@ref) can append it as the header's last key, or `nothing` when script
-embedding is disabled or no script is running. `config_text` holds the raw contents of a
+embedding is disabled or no script is running. `include_data` holds the sources of the
+files that script `include`s (see [`collect_included_sources`](@ref)), deferred the same
+way and written just after `script_text`. `config_text` holds the raw contents of a
 run's TOML config file (see the `config_file` argument of [`Writer`](@ref)), deferred so
 [`write_header!`](@ref) can append it as the header's very last key (after `script`), or
 `nothing` when no config file was given.
@@ -55,6 +77,7 @@ mutable struct Writer
     path_target_points::Int
     header_written::Bool
     script_text::Union{String, Nothing}
+    include_data::Union{OrderedDict{String, Any}, Nothing}
     config_text::Union{String, Nothing}
 end
 
@@ -62,7 +85,7 @@ end
     Writer(measure, constraints, partition, output_file_path; output_districting=true,
            description="", time_stamp=string(Dates.now()), io_mode="w",
            additional_parameters=Dict{String,Any}(), weight_type=Int64,
-           write_header=true)
+           write_header=true, max_include_bytes=MAX_INCLUDE_BYTES)
 
 Open `output_file_path` (`.jsonl` or `.jsonl.gz`) and write the Atlas header,
 recording the measure's energies and weights, the population bounds and constraint
@@ -74,10 +97,11 @@ weight, recorded in the Atlas header: the default `Int64` suits ordinary MCMC ru
 [`run_annealed_importance_sampling!`](@ref).
 
 Execution metadata is also stamped automatically (see
-[`stamp_execution_metadata!`](@ref)): the running `"user"`, the `"script_name"`, and —
-when `include_script=true` (the default) — the full source of the executing script under
-`"script"`, appended as the header's final key. Pass `include_script=false` to omit the
-embedded source.
+[`stamp_execution_metadata!`](@ref)): the running `"user"`, the `"julia_version"`, the
+`"script_name"`, and — when `include_script=true` (the default) — the full source of the
+executing script under `"script"`, followed by the sources of every file it `include`s
+under `"script_includes"`. Pass `include_script=false` to omit both, or lower
+`max_include_bytes` to cap how much included source is embedded.
 
 If `config_file` names an existing file, its full contents are read and appended, under
 `"toml_config"`, as the header's very last key — after `"script"` — so it can never be
@@ -106,7 +130,8 @@ function Writer(
     path_target_points::Int=50,
     include_script::Bool=true,
     config_file::Union{String, Nothing}=nothing,
-    write_header::Bool=true
+    write_header::Bool=true,
+    max_include_bytes::Int=MAX_INCLUDE_BYTES
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -163,8 +188,9 @@ function Writer(
     writer = Writer(atlas, MapParam(), map_output_data, output_districting,
                     node_map, partition.node_col,
                     PathRecorder[], path_target_points, !write_header,
-                    nothing, nothing)#, proposal_diagnostics)
-    stamp_execution_metadata!(writer; include_script=include_script)
+                    nothing, nothing, nothing)#, proposal_diagnostics)
+    stamp_execution_metadata!(writer; include_script=include_script,
+                              max_include_bytes=max_include_bytes)
     if config_file !== nothing && isfile(config_file)
         try
             writer.config_text = read(config_file, String)
@@ -192,6 +218,15 @@ function write_header!(writer::Writer)
     # `additional_parameters["script"]` keeps its own position and wins.
     if writer.script_text !== nothing && !haskey(writer.atlas.atlasParam, "script")
         writer.atlas.atlasParam["script"] = writer.script_text
+    end
+    # The script's own `include`s go right after it: a runner script's behaviour is
+    # usually spread across the files it pulls in, so embedding one without the other
+    # records only part of what produced the atlas.
+    if writer.include_data !== nothing
+        for (key, val) in writer.include_data
+            haskey(writer.atlas.atlasParam, key) ||
+                (writer.atlas.atlasParam[key] = val)
+        end
     end
     # Append the TOML config's raw contents last of all — after "script" — so it can
     # never be overwritten by (and never overwrites) any other header data. Skipped
@@ -248,21 +283,119 @@ function real_name()
 end
 
 """
-    stamp_execution_metadata!(writer; include_script=true)
+    collect_included_sources(script_path; max_bytes=MAX_INCLUDE_BYTES,
+                             max_depth=MAX_INCLUDE_DEPTH)
+        -> (sources, unresolved, skipped)
+
+Read the sources of every file `script_path` pulls in with `include`, following
+`include`s of `include`s. Returns
+
+- `sources`: an `OrderedDict` from each file's path — relative to `script_path`'s
+  directory, so nothing leaks the absolute layout of the machine that ran it — to its
+  full text, in the order the files were discovered;
+- `unresolved`: the text of any `include(…)` call whose argument is not a literal
+  string (a computed path cannot be followed by reading the source), and of any
+  literal include whose file does not exist;
+- `skipped`: files not embedded because `max_bytes` of source had already been
+  collected.
+
+A runner script's behaviour usually lives mostly in the files it includes, so an Atlas
+that embeds the script alone records only part of what produced it (see
+[`stamp_execution_metadata!`](@ref), which stores this under `"script_includes"`).
+
+Each file's `include`s are resolved relative to that file's own directory, matching
+Julia. Cycles are impossible (each absolute path is visited once) and recursion stops
+at `max_depth`. Nothing here throws: an unreadable file is reported in `unresolved`
+rather than raised, since provenance must never take a run down.
+"""
+function collect_included_sources(
+    script_path::AbstractString;
+    max_bytes::Int=MAX_INCLUDE_BYTES,
+    max_depth::Int=MAX_INCLUDE_DEPTH
+)
+    sources = OrderedDict{String, String}()
+    unresolved = String[]
+    skipped = String[]
+    root = dirname(abspath(script_path))
+    visited = Set{String}([abspath(script_path)])
+    total = 0
+
+    # `include("literal")`, ignoring commented-out lines. Anything else that calls
+    # include (a computed path, a variable) is reported rather than followed.
+    literal_re = r"\binclude\(\s*\"([^\"]*)\"\s*\)"
+    any_re = r"\binclude\("
+
+    function scan(path::AbstractString, text::AbstractString, depth::Int)
+        depth > max_depth && return
+        here = dirname(abspath(path))
+        for line in eachline(IOBuffer(text))
+            stripped = lstrip(line)
+            startswith(stripped, "#") && continue
+            occursin(any_re, line) || continue
+            m = match(literal_re, line)
+            if m === nothing
+                push!(unresolved, strip(line))
+                continue
+            end
+            inc_abs = abspath(joinpath(here, m.captures[1]))
+            inc_abs in visited && continue
+            push!(visited, inc_abs)
+            if !isfile(inc_abs)
+                push!(unresolved, strip(line))
+                continue
+            end
+            inc_text = try
+                read(inc_abs, String)
+            catch
+                push!(unresolved, strip(line))
+                continue
+            end
+            rel = relpath(inc_abs, root)
+            if total + sizeof(inc_text) > max_bytes
+                push!(skipped, rel)
+                continue
+            end
+            total += sizeof(inc_text)
+            sources[rel] = inc_text
+            scan(inc_abs, inc_text, depth+1)
+        end
+    end
+
+    try
+        scan(script_path, read(script_path, String), 1)
+    catch
+        # an unreadable top-level script is already handled by the caller
+    end
+    return sources, unresolved, skipped
+end
+
+"""
+    stamp_execution_metadata!(writer; include_script=true,
+                              max_include_bytes=MAX_INCLUDE_BYTES)
 
 Stamp who and what is producing this Atlas into the header's `atlasParam`: the running
 `"user"` (from `ENV["USER"]`/`ENV["USERNAME"]`), the `"user_full_name"` (from
-[`real_name`](@ref), omitted when unavailable), and, when a script is being run
-(`PROGRAM_FILE` is non-empty), its `"script_name"`. When `include_script=true` (the
-default) the executing script's full source is captured and, by
-[`write_header!`](@ref), appended as the header's **last** key under `"script"`; pass
-`include_script=false` to omit the embedded source. Called automatically by the
-[`Writer`](@ref) constructor, but also safe to call by hand on an existing writer before
-its header is written. Each field is set only if absent, so a user's
-`additional_parameters` win; a no-op in the REPL for the script fields (no
+[`real_name`](@ref), omitted when unavailable), the `"julia_version"`, and, when a
+script is being run (`PROGRAM_FILE` is non-empty), its `"script_name"`.
+
+When `include_script=true` (the default) the executing script's full source is captured
+and, by [`write_header!`](@ref), appended near the end of the header under `"script"`,
+followed by the sources of every file the script `include`s under `"script_includes"`
+(see [`collect_included_sources`](@ref)) — a runner script's behaviour usually lives
+mostly in those files. `"script_includes_unresolved"` and `"script_includes_skipped"`
+record what could not be followed and what `max_include_bytes` cut off, and are omitted
+when empty. Pass `include_script=false` to embed no source at all.
+
+Called automatically by the [`Writer`](@ref) constructor, but also safe to call by hand
+on an existing writer before its header is written. Each field is set only if absent, so
+a user's `additional_parameters` win; a no-op in the REPL for the script fields (no
 `PROGRAM_FILE`), and an unreadable script is skipped rather than raised.
 """
-function stamp_execution_metadata!(writer::Writer; include_script::Bool=true)
+function stamp_execution_metadata!(
+    writer::Writer;
+    include_script::Bool=true,
+    max_include_bytes::Int=MAX_INCLUDE_BYTES
+)
     ap = writer.atlas.atlasParam
     haskey(ap, "user") ||
         (ap["user"] = get(ENV, "USER", get(ENV, "USERNAME", "unknown")))
@@ -270,13 +403,26 @@ function stamp_execution_metadata!(writer::Writer; include_script::Bool=true)
         name = real_name()
         isempty(name) || (ap["user_full_name"] = name)
     end
+    haskey(ap, "julia_version") || (ap["julia_version"] = string(VERSION))
     if !isempty(PROGRAM_FILE)
         haskey(ap, "script_name") || (ap["script_name"] = basename(PROGRAM_FILE))
         if include_script && !haskey(ap, "script") && isfile(PROGRAM_FILE)
             try
                 writer.script_text = read(PROGRAM_FILE, String)
+                sources, unresolved, skipped =
+                    collect_included_sources(PROGRAM_FILE;
+                                             max_bytes=max_include_bytes)
+                include_data = OrderedDict{String, Any}()
+                isempty(sources) ||
+                    (include_data["script_includes"] = sources)
+                isempty(unresolved) ||
+                    (include_data["script_includes_unresolved"] = unresolved)
+                isempty(skipped) ||
+                    (include_data["script_includes_skipped"] = skipped)
+                writer.include_data = isempty(include_data) ? nothing : include_data
             catch
                 writer.script_text = nothing
+                writer.include_data = nothing
             end
         end
     end

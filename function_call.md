@@ -437,7 +437,8 @@ Writer(
     path_target_points::Int=50,
     include_script::Bool=true,
     config_file::Union{String,Nothing}=nothing,
-    write_header::Bool=true
+    write_header::Bool=true,
+    max_include_bytes::Int=MAX_INCLUDE_BYTES
 )::Writer
 ```
 
@@ -451,9 +452,12 @@ the default `Int64` suits ordinary MCMC runs (every map has weight 1); pass
 [`push_path_writer!`](#push_path_writer).
 
 Execution metadata is stamped automatically: the running `"user"`, the
-`"script_name"`, and — when `include_script=true` (the default) — the full source
-of the executing script under `"script"`, appended as the header's final key.
-Pass `include_script=false` to omit the embedded source.
+`"julia_version"`, the `"script_name"`, and — when `include_script=true` (the
+default) — the full source of the executing script under `"script"`, followed by
+the sources of every file that script `include`s under `"script_includes"` (see
+[`collect_included_sources`](#collect_included_sources)). `max_include_bytes` caps
+how much included source is embedded; anything past it is listed by name under
+`"script_includes_skipped"`. Pass `include_script=false` to embed no source at all.
 
 If `config_file` names an existing file, its full contents are read and appended
 under `"toml_config"` as the header's very last key — after `"script"` — so it
@@ -500,6 +504,36 @@ close_writer(writer::Writer)
 ```
 
 Flush and close the Atlas file. Call once after the run finishes.
+
+### `collect_included_sources`
+
+```julia
+collect_included_sources(
+    script_path::AbstractString;
+    max_bytes::Int=MAX_INCLUDE_BYTES,
+    max_depth::Int=MAX_INCLUDE_DEPTH
+) -> (sources, unresolved, skipped)
+```
+
+Read the sources of every file `script_path` pulls in with `include`, following
+`include`s of `include`s. Used by the `Writer` to record a run's full source in the
+Atlas header, not just the top-level script — a runner script's behaviour usually
+lives mostly in the files it includes.
+
+| Returned | Contents |
+| --- | --- |
+| `sources` | `OrderedDict` from each file's path (relative to `script_path`'s directory) to its text, in discovery order. |
+| `unresolved` | `include(…)` calls with a non-literal (computed) path, and literal includes whose file is missing or unreadable. |
+| `skipped` | Files not embedded because `max_bytes` of source had already been collected. |
+
+Each file's `include`s resolve relative to that file's own directory, matching Julia.
+Commented-out includes are ignored, each path is visited once (so cycles terminate),
+and nothing throws — provenance collection must never take a run down.
+
+`CycleWalk.MAX_INCLUDE_BYTES` (1 MB) and `CycleWalk.MAX_INCLUDE_DEPTH` (8) are the
+package-level defaults (unexported; pass `max_include_bytes` to `Writer` to override
+per run). The header is a single JSON line that every reader parses, so the byte cap
+keeps a runner that includes something large from bloating every atlas it writes.
 
 ---
 

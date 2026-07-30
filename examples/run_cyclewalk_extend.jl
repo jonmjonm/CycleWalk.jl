@@ -98,6 +98,26 @@ if !(parent_script in ("run_cyclewalk_toml.jl", "run_cyclewalk_extend.jl")) &&
           "pass --force to extend it anyway")
 end
 
+# This script re-derives the run's settings with today's parameterUtils.jl, not the
+# copy the parent actually ran. When the parent embedded its includes, compare them
+# against what is on disk now and say so if they have drifted. The recorded sources
+# are never executed — an atlas is a file that gets passed around, and running code
+# out of one would make opening someone else's atlas a way to run their code.
+parent_includes = get(parent_ap, "script_includes", nothing)
+if parent_includes !== nothing
+    drifted = String[]
+    for key in keys(parent_includes)
+        rel = String(key)
+        current = joinpath(@__DIR__, rel)
+        isfile(current) || continue
+        read(current, String) == String(parent_includes[key]) || push!(drifted, rel)
+    end
+    isempty(drifted) ||
+        @warn "these files have changed since $(basename(atlas_file)) was written, " *
+              "so this extension may not derive its settings the way the parent " *
+              "run did" drifted
+end
+
 # ---------------------------------------------------------------------------------
 # Rebuild the run's parameters from the config the parent run embedded in its header.
 # ---------------------------------------------------------------------------------

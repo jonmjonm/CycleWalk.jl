@@ -142,6 +142,87 @@
         end
     end
 
+    @testset "collect_included_sources follows a script's includes" begin
+        mktempdir() do dir
+            # a -> b -> c, plus b -> a (a cycle), a missing file, and a computed path
+            write(joinpath(dir, "a.jl"), """
+                include("b.jl")
+                include("missing.jl")
+                include(joinpath(somewhere, "computed.jl"))
+                # include("commented_out.jl")
+                """)
+            write(joinpath(dir, "b.jl"), "include(\"sub/c.jl\")\ninclude(\"a.jl\")\n")
+            mkpath(joinpath(dir, "sub"))
+            write(joinpath(dir, "sub", "c.jl"), "x = 1\n")
+
+            sources, unresolved, skipped =
+                collect_included_sources(joinpath(dir, "a.jl"))
+
+            # nested includes are followed, and resolved relative to their own file
+            @test collect(keys(sources)) == ["b.jl", joinpath("sub", "c.jl")]
+            @test sources[joinpath("sub", "c.jl")] == "x = 1\n"
+            # the include back to the entry script is not re-read
+            @test !haskey(sources, "a.jl")
+            @test isempty(skipped)
+
+            # a missing file and a computed path are reported, not followed;
+            # a commented-out include is ignored entirely
+            @test length(unresolved) == 2
+            @test any(occursin("missing.jl", u) for u in unresolved)
+            @test any(occursin("computed.jl", u) for u in unresolved)
+            @test !any(occursin("commented_out", u) for u in unresolved)
+        end
+    end
+
+    @testset "max_bytes caps the embedded source" begin
+        mktempdir() do dir
+            write(joinpath(dir, "a.jl"), "include(\"big.jl\")\ninclude(\"small.jl\")\n")
+            write(joinpath(dir, "big.jl"), "#"^5000)
+            write(joinpath(dir, "small.jl"), "y = 2\n")
+
+            sources, _, skipped =
+                collect_included_sources(joinpath(dir, "a.jl"); max_bytes=1000)
+            @test skipped == ["big.jl"]
+            # the cap skips the oversized file but keeps going
+            @test collect(keys(sources)) == ["small.jl"]
+        end
+    end
+
+    @testset "a script's includes reach the atlas header" begin
+        # PROGRAM_FILE is what the writer embeds, and it is whatever is running the
+        # tests, so drive a real script through a subprocess instead of faking it.
+        mktempdir() do dir
+            write(joinpath(dir, "helper.jl"), "const HELPER_MARKER = 12345\n")
+            script = joinpath(dir, "runner.jl")
+            write(script, """
+                using CycleWalk, RandomNumbers
+                include("helper.jl")
+                graph_json = $(repr(extend_json))
+                nd = Set(["county", "pct", "pop", "area", "border_length"])
+                bg = BaseGraph(graph_json, "pop"; inc_node_data=nd, area_col="area",
+                               node_border_col="border_length",
+                               edge_perimeter_col="length")
+                g = MultiLevelGraph(bg, ["pct"])
+                cons = initialize_constraints()
+                add_constraint!(cons, PopulationConstraint(g, 4, 0.1))
+                p = LinkCutPartition(g, cons, 4; rng=PCG.PCGStateOneseq(UInt64, 5))
+                m = Measure(); push_energy!(m, get_log_spanning_forests, 1.0)
+                w = Writer(m, cons, p, $(repr(joinpath(dir, "out.jsonl.gz"))))
+                close_writer(w)
+                """)
+            project = dirname(Base.active_project())
+            run(pipeline(`$(Base.julia_cmd()) --project=$project $script`;
+                         stdout=devnull, stderr=devnull))
+
+            ap, _ = read_atlas(joinpath(dir, "out.jsonl.gz"))
+            @test ap["script_name"] == "runner.jl"
+            @test occursin("include(\"helper.jl\")", ap["script"])
+            @test haskey(ap, "script_includes")
+            @test ap["script_includes"]["helper.jl"] == "const HELPER_MARKER = 12345\n"
+            @test haskey(ap, "julia_version")
+        end
+    end
+
     @testset "relabel_districts! rejects an assignment that is not a relabelling" begin
         p = fresh_partition(27)
         node_field = p.node_col
