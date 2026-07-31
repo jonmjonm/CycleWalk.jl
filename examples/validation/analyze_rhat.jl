@@ -27,7 +27,7 @@ thresh = parse(Float64, argval("--rhat", "1.01"))
 tstr = argval("--t", startswith(tag, "t") ? tag[2:end] : "?")
 
 const EXAMPLES = normpath(joinpath(@__DIR__, ".."))
-outdir = joinpath(EXAMPLES, "output", "validation")
+outdir = get(ENV, "CW_OUTDIR", joinpath(EXAMPLES, "output", "validation"))
 
 # --- inverse normal CDF (Acklam), dependency-free ---------------------------
 function norminv(p::Float64)
