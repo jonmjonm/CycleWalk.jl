@@ -70,18 +70,59 @@ function evaluate_weight_expression(
         throw(ArgumentError("could not parse the expression \"$expr\""))
     end
     counter = Ref(0)
-    value = _eval_weight_node(ast, parameters, expr, 1, counter)
+    value = _walk_weight_ast(ast, expr, 1, counter) do name
+        if !haskey(parameters, name)
+            known = join(sort!(collect(String.(keys(parameters)))), ", ")
+            throw(ArgumentError("the expression \"$expr\" refers to \"$name\", which " *
+                                "is not a known parameter (known: $known)"))
+        end
+        value = parameters[name]
+        value isa Real && !(value isa Bool) ||
+            throw(ArgumentError("parameter \"$name\" is $(repr(value)), not a number"))
+        float(value)
+    end
     isa(value, Real) && isfinite(value) ||
         throw(ArgumentError("the expression \"$expr\" evaluates to $value, which is " *
                             "not a usable weight"))
     return Float64(value)
 end
 
-# Interpret one AST node. Everything not explicitly allowed is rejected, so new Julia
-# syntax cannot quietly become permissible.
-function _eval_weight_node(
+"""
+    weight_expression_parameters(expr) -> Vector{String}
+
+The names a weight expression reads, sorted and without repeats:
+`weight_expression_parameters("2*gamma + gamma/iso_weight")` is
+`["gamma", "iso_weight"]`. Refuses exactly what [`evaluate_weight_expression`](@ref)
+refuses — it is the same walk over the same parsed tree, with the names collected
+instead of looked up — so it can be called on an expression before any parameters
+exist.
+
+Used to decide which of a run's parameters actually reach its measure: a parameter no
+expression names cannot change the target, and one that is named must appear in the
+atlas file name, or two runs differing only in it would collide on one path.
+"""
+function weight_expression_parameters(expr::AbstractString)
+    ast = try
+        Meta.parse(strip(expr))
+    catch err
+        throw(ArgumentError("could not parse the expression \"$expr\""))
+    end
+    found = String[]
+    _walk_weight_ast(ast, expr, 1, Ref(0)) do name
+        name in found || push!(found, name)
+        1.0                     # a stand-in value; only the names matter here
+    end
+    return sort!(found)
+end
+
+# Walk one AST node, calling `at_symbol(name)` for each name and combining the results
+# with the allowed operators. Everything not explicitly allowed is rejected, so new
+# Julia syntax cannot quietly become permissible. Evaluating and collecting names are
+# the same traversal with different `at_symbol`s, which is what keeps the two from
+# ever disagreeing about what an expression is allowed to contain.
+function _walk_weight_ast(
+    at_symbol::Function,
     node,
-    parameters::AbstractDict,
     src::AbstractString,
     depth::Int,
     counter::Ref{Int}
@@ -100,16 +141,7 @@ function _eval_weight_node(
     elseif node isa Real
         return float(node)
     elseif node isa Symbol
-        name = String(node)
-        if !haskey(parameters, name)
-            known = join(sort!(collect(String.(keys(parameters)))), ", ")
-            throw(ArgumentError("the expression \"$src\" refers to \"$name\", which " *
-                                "is not a known parameter (known: $known)"))
-        end
-        value = parameters[name]
-        value isa Real && !(value isa Bool) ||
-            throw(ArgumentError("parameter \"$name\" is $(repr(value)), not a number"))
-        return float(value)
+        return at_symbol(String(node))
     elseif node isa Expr && node.head === :call
         op = length(node.args) >= 1 ? node.args[1] : nothing
         # `Base.exit()` parses as a call whose callee is an Expr, not a Symbol, so
@@ -117,7 +149,7 @@ function _eval_weight_node(
         (op isa Symbol && haskey(WEIGHT_EXPRESSION_OPS, op)) ||
             throw(ArgumentError("the expression \"$src\" uses \"$op\", which is not " *
                                 "allowed (only + - * / ^)"))
-        args = [_eval_weight_node(a, parameters, src, depth+1, counter)
+        args = [_walk_weight_ast(at_symbol, a, src, depth+1, counter)
                 for a in node.args[2:end]]
         return try
             WEIGHT_EXPRESSION_OPS[op](args...)
