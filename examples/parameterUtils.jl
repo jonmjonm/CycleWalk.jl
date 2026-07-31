@@ -43,6 +43,8 @@ function derive_params(
 
     # optional parameters (absent keys take defaults)
     measure_scores     = get(params["measure"], "measure_scores", [])
+    # per-score weights for anything gamma/iso_weight do not cover (see build_measure)
+    measure_weights    = get(params["measure"], "weights", Dict{String, Any}())
     writer_stats       = get(params["plans"], "writer_stats", [])
     area_col           = get(params["plans"], "area_col", nothing)
     node_border_col    = get(params["plans"], "node_border_col", nothing)
@@ -93,7 +95,8 @@ function derive_params(
     return (; gamma, iso_weight, cycle_walk_steps, two_cycle_walk_frac,
             outputDirectory, atlasNameBase, thread_id, cycle_walk_out_freq,
             map_directory, map_file, num_dists, pop_dev, node_data, pop_col,
-            geo_units, measure_scores, writer_stats, area_col, node_border_col,
+            geo_units, measure_scores, measure_weights, writer_stats, area_col,
+            node_border_col,
             edge_perimeter_col, compress, output_districting, io_mode,
             description, rng_seed_base, blas_threads, run_diagnostics_flag,
             rng_seed, steps, outfreq, atlasName, output_file_path, pctGraphPath,
@@ -118,14 +121,32 @@ function print_params(p)
 end
 
 """
-    build_measure(measure_scores, gamma, iso_weight) -> Measure
+    build_measure(measure_scores, gamma, iso_weight; weights=Dict()) -> Measure
 
 Assemble the run's [`Measure`](@ref) from the TOML's `measure_scores` list: the log
 spanning-forest count is weighted by `gamma`, the Polsby-Popper score by `iso_weight`,
-and any other named score is looked up in `CycleWalk` and pushed with its default
-weight.
+and any other named score is looked up in `CycleWalk` and weighted by `weights[name]`,
+read from the config's optional `[measure.weights]` table:
+
+```toml
+[measure]
+measure_scores = ["get_log_spanning_forests", "get_log_district_trees"]
+gamma = 1.0
+
+[measure.weights]
+get_log_district_trees = 0.5
+```
+
+There is no default weight — `push_energy!` requires one, and guessing would silently
+change the target — so a score outside the two named above with no entry in `weights`
+is an error rather than a run that samples something other than what was asked for.
+
+Note that `push_energy!` drops a score whose weight is exactly `0`, so a score
+configured with zero weight contributes nothing and does not appear in the Atlas
+header's energy list.
 """
-function build_measure(measure_scores, gamma, iso_weight)
+function build_measure(measure_scores, gamma, iso_weight;
+                       weights::AbstractDict=Dict{String, Any}())
     measure = Measure()
     for fnct_str in measure_scores
         if fnct_str=="get_log_spanning_forests"
@@ -133,8 +154,16 @@ function build_measure(measure_scores, gamma, iso_weight)
         elseif fnct_str=="get_isoperimetric_score"
             push_energy!(measure, get_isoperimetric_score, iso_weight)
         else
+            haskey(weights, fnct_str) || error(
+                "no weight for measure score \"$fnct_str\": add it under " *
+                "[measure.weights] in the TOML config (gamma and iso_weight " *
+                "weight get_log_spanning_forests and get_isoperimetric_score)")
+            isdefined(CycleWalk, Symbol(fnct_str)) || error(
+                "unknown measure score \"$fnct_str\": CycleWalk defines no such name")
             fnct = getfield(CycleWalk, Symbol(fnct_str))
-            push_energy!(measure, fnct)
+            fnct isa Function || error(
+                "measure score \"$fnct_str\" is not a function")
+            push_energy!(measure, fnct, weights[fnct_str])
         end
     end
     return measure

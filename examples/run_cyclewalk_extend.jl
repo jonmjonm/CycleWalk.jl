@@ -147,7 +147,7 @@ params["mcmc"]["cycle_walk_steps"] = add_cycle_walk_steps
 # beside the parent atlas, so skip creating it.
 p = derive_params(params, toml_source; make_output_dir=false)
 @unpack gamma, iso_weight, two_cycle_walk_frac, num_dists, pop_dev, node_data,
-        pop_col, geo_units, measure_scores, writer_stats, area_col,
+        pop_col, geo_units, measure_scores, measure_weights, writer_stats, area_col,
         node_border_col, edge_perimeter_col, output_districting, description,
         rng_seed_base, blas_threads, thread_id, steps, outfreq, pctGraphPath,
         ad_param = p
@@ -318,7 +318,7 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(two_cycle_walk_frac, cycle_walk),
             (1.0-two_cycle_walk_frac, internal_walk)]
 
-measure = build_measure(measure_scores, gamma, iso_weight)
+measure = build_measure(measure_scores, gamma, iso_weight; weights=measure_weights)
 
 # Precompute the run metadata rather than letting run_metropolis_hastings! stamp it,
 # so the header is complete before it is written (:rewrite forces it out early, to
