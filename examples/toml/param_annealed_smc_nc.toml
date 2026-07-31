@@ -1,21 +1,7 @@
 # Annealed SMC config for NC (14 districts). Run with:
 #   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml
-# Any [smc]/[measure]
-# Annealing endpoints: each energy's `weight` is its TARGET (t=1) and its
-# `weight_start` the BASE the base chain samples at t=0 (default 0, which recovers the
-# spanning-forest base). A weight may also be arithmetic over the parameters above.
-gamma = 0.25
-iso_weight = 0.3
-
-[[measure.energy]]
-name = "get_log_spanning_forests"
-weight = "gamma"
-# weight_start = 0.0
-
-[[measure.energy]]
-name = "get_isoperimetric_score"
-weight = "iso_weight"
-# weight_start = 0.0
+# The measure format is documented in ../../docs/run_cyclewalk_toml.md; [smc] is
+# specific to this runner.
 
 [plans]
 pop_dev = 0.02
@@ -29,16 +15,25 @@ edge_perimeter_col = "length"
 map_directory = ["..", "test", "test_graphs"]   # NC_pct21.json lives in the repo's test graphs
 map_file = "NC_pct21.json"
 
-# annealing endpoints. gamma/iso_weight are the TARGET weights (t=1); gamma_start/
-# iso_start are the BASE weights at t=0 (default 0). Default base 0/0 ramps up from
-# all-zero; set them (or pass --gamma-start/--iso-start) to anneal between two nonzero
-# parameter sets. A term is annealed if either endpoint is nonzero.
+# Annealing endpoints: each energy's `weight` is its TARGET (t=1) and its
+# `weight_start` the BASE the base chain samples at t=0 (default 0, which recovers the
+# spanning-forest base, and is what the commented lines below would say explicitly).
+# Set a nonzero weight_start to anneal between two nonzero parameter sets — the base
+# chain has to be able to mix under whatever base that gives. A weight may also be
+# arithmetic over the parameters named in [measure].
 [measure]
-measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
 gamma = 0.25
 iso_weight = 0.3
-# gamma_start = 0.0
-# iso_start = 0.0
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+# weight_start = 0.0
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+# weight_start = 0.0
 
 [smc]
 schedule = "fixed"        # "fixed" (t-grid + ESS<ess_frac*N resample) or "adaptive"

@@ -56,7 +56,12 @@ function derive_params(
                                measure_params)
     iso_weight = energy_weight(measure_specs, "get_isoperimetric_score",
                                measure_params)
-    writer_stats       = get(params["plans"], "writer_stats", [])
+    # writer_stats belongs to [run] — it says what each recorded map carries, not what
+    # a plan is — and that is where every config puts it and where the AIS/SMC runners
+    # read it. [plans] is read as a fallback so a config written against the earlier
+    # (mis)reading keeps working rather than silently recording nothing.
+    writer_stats       = get(params["run"], "writer_stats",
+                             get(params["plans"], "writer_stats", []))
     area_col           = get(params["plans"], "area_col", nothing)
     node_border_col    = get(params["plans"], "node_border_col", nothing)
     edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
