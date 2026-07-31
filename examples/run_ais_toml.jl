@@ -101,7 +101,11 @@ measure = Measure()
 for s in measure_scores
     haskey(target_weight, s) ||
         error("unsupported measure score for AIS: \"$s\" (expected one of $(keys(target_weight)))")
-    push_energy!(measure, getfield(CycleWalk, Symbol(s)), target_weight[s])
+    # An energy annealed *down to* zero has a zero target weight; without allow_zero
+    # it would never enter measure.scores, and modify_measure! below would then write
+    # its ramped weight into a measure that ignores it.
+    push_energy!(measure, getfield(CycleWalk, Symbol(s)), target_weight[s];
+                 allow_zero = base_weight[s] != 0)
 end
 
 # ramp every energy weight linearly from its base value (step 0) to its target

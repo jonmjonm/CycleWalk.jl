@@ -134,8 +134,12 @@ base_weight   = Dict{String,Float64}("get_log_spanning_forests" => gamma_start,
 measure = Measure()
 for sc in measure_scores
     haskey(target_weight, sc) || error("unsupported measure score \"$sc\"")
+    # The guard skips an energy that is zero the whole way; allow_zero keeps one that
+    # is annealed *down to* zero, which has a zero target weight but must still be in
+    # measure.scores for the path to ramp it (see push_energy!).
     (target_weight[sc] > 0 || base_weight[sc] > 0) &&
-        push_energy!(measure, getfield(CycleWalk, Symbol(sc)), target_weight[sc])
+        push_energy!(measure, getfield(CycleWalk, Symbol(sc)), target_weight[sc];
+                     allow_zero = base_weight[sc] != 0)
 end
 
 # Linear path from base weights (t=0) to target weights (t=1), aligned to the exact
