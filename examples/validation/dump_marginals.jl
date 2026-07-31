@@ -21,7 +21,7 @@ isempty(tags) && error("--tags required (comma-separated point tags)")
 nbins = parse(Int, argval("--bins", "50"))
 
 const EXAMPLES = normpath(joinpath(@__DIR__, ".."))
-outdir = joinpath(EXAMPLES, "output", "validation")
+outdir = get(ENV, "CW_OUTDIR", joinpath(EXAMPLES, "output", "validation"))
 
 function read_copy(path)
     io = AIO.smartOpen(path, "r"); atlas = AIO.openAtlas(io)

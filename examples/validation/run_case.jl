@@ -79,8 +79,21 @@ function case_config(case)
                 node_data=["county","prec_id","pop2020cen","area","border_length"],
                 num_dists=14, pop_dev=0.02,
                 gamma=0.25, iso_weight=0.3, twocycle_frac=0.1)
+    elseif (mm = match(r"^(grid|hex)(\d+)_d(\d+)$", case)) !== nothing
+        # generic regular-lattice cases: <grid|hex><size>_d<ndist>, e.g. grid20_d5, hex30_d10.
+        # These are the QG geographic graphs (data/{grid,hex}/{grid,hex}_graph_S_by_S.json),
+        # same NetworkX schema as the 10x10 grid. Unit population => sizes divide evenly, so
+        # pop_dev must be loose enough for the walk to move (0.05 gives a few units of slack).
+        lattice = mm.captures[1]; sz = mm.captures[2]; nd = parse(Int, mm.captures[3])
+        return (; graph_path = joinpath(EXAMPLES, "data", lattice,
+                                        "$(lattice)_graph_$(sz)_by_$(sz).json"),
+                pop_col="population", geo="node_name", area_col="area",
+                node_border_col="border_length", edge_perimeter_col="length",
+                node_data=["node_name","population","area","border_length","county"],
+                num_dists=nd, pop_dev=0.05,
+                gamma=0.25, iso_weight=0.3, twocycle_frac=0.1)
     else
-        error("unknown --case $(repr(case)) (expected small, ct, grid, or nc)")
+        error("unknown --case $(repr(case)) (expected small, ct, grid, nc, or <grid|hex><S>_d<N>)")
     end
 end
 cfg = case_config(case)
@@ -156,7 +169,9 @@ end
 # ---------------------------------------------------------------------------
 # writer (per-district isoperimetric scores; Float64 weights only for AIS)
 # ---------------------------------------------------------------------------
-outdir = joinpath(EXAMPLES, "output", "validation")
+# CW_OUTDIR redirects the (large) per-sample atlases to a scratch dir (e.g. /gtmp/jonm on
+# the cluster); defaults to the in-repo output dir. Analyzers read the same env var.
+outdir = get(ENV, "CW_OUTDIR", joinpath(EXAMPLES, "output", "validation"))
 mkpath(outdir)
 suffix = dev ? "_dev" : ""
 # --tag disambiguates outputs when many runs of the same case/mode coexist (e.g. the
