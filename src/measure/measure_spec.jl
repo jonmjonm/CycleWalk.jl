@@ -394,6 +394,29 @@ function energy_weight_start(specs::AbstractVector{EnergySpec}, name::AbstractSt
 end
 
 """
+    referenced_parameters(specs) -> Vector{String}
+
+Every named parameter the measure described by `specs` actually reads, sorted and
+without repeats — the union over each spec's `weight` and `weight_start` of
+[`weight_expression_parameters`](@ref). A weight written as a plain number reads
+nothing and contributes no names.
+
+This is what a run must put in its output file name: a parameter no expression names
+cannot change the target, while one that is named must appear, or two runs differing
+only in it would compute the same path and the second would overwrite the first.
+"""
+function referenced_parameters(specs::AbstractVector{EnergySpec})
+    found = String[]
+    for spec in specs, value in (spec.weight, spec.weight_start)
+        value isa AbstractString || continue
+        for name in weight_expression_parameters(value)
+            name in found || push!(found, name)
+        end
+    end
+    return sort!(found)
+end
+
+"""
     annealing_weights(specs, parameters) -> Dict{String, Tuple{Float64, Float64}}
 
 The `(start, target)` weight of each spec that carries a `weight_start`, keyed by

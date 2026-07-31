@@ -349,6 +349,37 @@ end
         @test Set(keys(ramp2)) == m2.scores
     end
 
+    @testset "referenced_parameters is what the measure actually reads" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 1.0, "vra_weight" => 2.0, "unused" => 7.0,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma"),
+                Dict{String, Any}("name" => "get_log_district_trees",
+                                  "weight" => "2*vra_weight")])
+        # `unused` is defined but no expression names it, so it cannot change the
+        # target and must not affect the run's identity
+        @test referenced_parameters(energy_specs(cfg)) == ["gamma", "vra_weight"]
+
+        # a literal weight reads nothing
+        literal = energy_specs(Dict{String, Any}(
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => 2.0)]))
+        @test referenced_parameters(literal) == String[]
+
+        # weight_start counts too — it changes the schedule
+        annealed = energy_specs(Dict{String, Any}(
+            "gamma" => 1.0, "warmup" => 0.5,
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => "gamma",
+                                           "weight_start" => "warmup")]))
+        @test referenced_parameters(annealed) == ["gamma", "warmup"]
+
+        # the short form reads gamma/iso_weight, which the runners tag by name
+        @test referenced_parameters(energy_specs(short_form)) ==
+              ["gamma", "iso_weight"]
+    end
+
     @testset "an empty [measure] gives an empty measure" begin
         @test isempty(energy_specs(Dict{String, Any}()))
         @test isempty(build_measure(Dict{String, Any}()).scores)
@@ -471,6 +502,56 @@ bump_probe(args...) = (EXPRESSION_PROBE[] += 1; 1.0)
         catch e; e end
         @test occursin("sqrt", err2.msg)
         @test occursin("+ - * / ^", err2.msg)
+    end
+
+    @testset "collecting names refuses exactly what evaluating refuses" begin
+        # weight_expression_parameters walks the same parsed tree as
+        # evaluate_weight_expression, through the same whitelist. It is a second
+        # entry point into that walk, so the guarantees have to be re-checked here:
+        # a collector that just grabbed every symbol would pass every test above.
+        for bad in ["run(`ls`)", "include(\"x.jl\")", "Base.exit()", "exit()",
+                    "sqrt(gamma)", "x[1]", "f(x)=x", "1+2; run(`ls`)",
+                    "\"a string\"", "gamma == 1", "!gamma", "gamma'",
+                    "@eval 1", "gamma % 2", "[gamma]", "(gamma, 1)",
+                    "if gamma; 1; end", "2*"]
+            @test_throws ArgumentError weight_expression_parameters(bad)
+        end
+
+        # the two entry points agree on what *is* allowed
+        for good in ["gamma", "2*gamma + 1", "-gamma", "(gamma+1)*2", "4", "n^2"]
+            @test weight_expression_parameters(good) isa Vector{String}
+            @test evaluate_weight_expression(good, knobs) isa Float64
+        end
+
+        @test weight_expression_parameters("2*gamma + gamma/iso_weight") ==
+              ["gamma", "iso_weight"]
+        @test weight_expression_parameters("4") == String[]
+        # collecting deliberately does not require the names to exist yet — it is
+        # called on a config before a run's parameters are assembled
+        @test weight_expression_parameters("not_a_parameter") == ["not_a_parameter"]
+
+        # and it must not act on what it refuses, any more than evaluating does
+        mktempdir() do dir
+            marker = joinpath(dir, "executed")
+            m = repr(marker)
+            for bad in ["write($m, \"x\")", "touch($m)", "run(`touch $marker`)",
+                        "(write($m, \"x\"); 1)", "gamma * write($m, \"x\")"]
+                @test_throws ArgumentError weight_expression_parameters(bad)
+                @test !ispath(marker)
+            end
+            @test isempty(readdir(dir))
+        end
+        @test_throws ArgumentError weight_expression_parameters("bump_probe()")
+        @test EXPRESSION_PROBE[] == 0
+
+        # the caps apply on this path too
+        deep = "gamma"
+        for _ = 1:40
+            deep = "(1+" * deep * ")"
+        end
+        @test_throws ArgumentError weight_expression_parameters(deep)
+        @test_throws ArgumentError weight_expression_parameters(
+            join(fill("gamma", 200), "+"))
     end
 
     @testset "runaway expressions are capped" begin

@@ -2,6 +2,15 @@
 ## These override the values in the TOML config file
 ## Everything downstream of the (overridden) TOML is computed by `derive_params` in
 ## parameterUtils.jl, which run_cyclewalk_extend.jl shares.
+
+include("parameterUtils.jl") # derive_params / print_params / parameter_tag / --set
+
+# `--set <table>.<key>=<value>` is repeatable, which ArgMacros has no macro for, so
+# these are lifted out of ARGS before the declared flags are parsed. Doing it here
+# means a new config key never needs a line added to this file to be swept.
+cli_overrides = take_set_overrides!(ARGS)
+overwrite_output = take_flag!(ARGS, "--overwrite")
+
 args = @dictarguments begin
     @argumentoptional Int thread_id "--thread_id"
     @argumentoptional Number two_cycle_walk_frac "--two_cycle_walk_frac" "-f"
@@ -29,10 +38,23 @@ params["plans"]["pop_dev"]= args[:pop_dev]!=nothing ? args[:pop_dev] : params["p
 params["plans"]["num_dists"]= args[:num_dists]!=nothing ? args[:num_dists] : params["plans"]["num_dists"]
 params["run"]["run_diagnostics"]= args[:run_diagnostics]!=nothing ? args[:run_diagnostics] : params["run"]["run_diagnostics"]
 
+# ...then the generic overrides, which reach keys no flag above names. A key a flag
+# also set is an error rather than a silent winner: a run whose gamma has two answers
+# should not pick one.
+apply_set_overrides!(params, cli_overrides;
+                     named_flags=Dict("measure.gamma"          => (args[:gamma], "--gamma"),
+                                      "measure.iso_weight"     => (args[:iso_weight], "--iso_weight"),
+                                      "run.thread_id"          => (args[:thread_id], "--thread_id"),
+                                      "mcmc.two_cycle_walk_frac" => (args[:two_cycle_walk_frac], "--two_cycle_walk_frac"),
+                                      "mcmc.cycle_walk_steps"  => (args[:cycle_walk_steps], "--cycle_walk_steps"),
+                                      "plans.num_dists"        => (args[:num_dists], "--num_dists"),
+                                      "plans.pop_dev"          => (args[:pop_dev], "--pop_dev"),
+                                      "run.run_diagnostics"    => (args[:run_diagnostics], "--run_diagnostics")))
 
-include("parameterUtils.jl") # derive_params / print_params
-
-derived_params = derive_params(params, toml_config_file)
+derived_params = derive_params(params, toml_config_file;
+                               cli_overrides=cli_overrides)
+ensure_writable(derived_params.output_file_path, derived_params.io_mode;
+                overwrite=overwrite_output)
 
 @unpack gamma, iso_weight, cycle_walk_steps, two_cycle_walk_frac,
         outputDirectory, atlasNameBase, thread_id, cycle_walk_out_freq,

@@ -22,9 +22,15 @@ using TOML, UnPack, ArgMacros
 using LinearAlgebra
 using Printf
 
+include("parameterUtils.jl") # parameter_tag / ensure_writable / take_flag!
+
 # ---------------------------------------------------------------------------
 # CLI overrides (nothing when absent) + TOML config; CLI wins over TOML
 # ---------------------------------------------------------------------------
+# ArgMacros parses the global ARGS and rejects flags it was not told about, so this
+# one comes out first.
+overwrite_output = take_flag!(ARGS, "--overwrite")
+
 args = @dictarguments begin
     @argumentoptional String  schedule      "--schedule"
     @argumentoptional Int      particles     "--particles"
@@ -160,10 +166,18 @@ path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]),
 # ---------------------------------------------------------------------------
 tag = @sprintf("_smc_p%d_b%d_r%d_t%d", particles, blocks, rejuv, nthreads)
 collect_steps > 0 && (tag *= @sprintf("_c%de%d", collect_steps, collect_every))
-(gamma_start > 0 || iso_start > 0) && (tag *= @sprintf("_start_g%g_i%g", gamma_start, iso_start))
+# The measure's weights belong in the name too — two runs of the same size differing
+# only in gamma used to compute one path. `string` rather than %g: %g rounds to six
+# significant figures, which would let two different weights share a name.
+gamma       > 0 && (tag *= "_gamma" * string(gamma))
+iso_weight  > 0 && (tag *= "_iso" * string(iso_weight))
+gamma_start > 0 && (tag *= "_gammastart" * string(gamma_start))
+iso_start   > 0 && (tag *= "_isostart" * string(iso_start))
+tag *= parameter_tag(measure_specs, measure_params)
 outdir = get(ENV, "CW_OUTDIR", joinpath(@__DIR__, outputDirectory...))
 mkpath(outdir)
 output_file_path = joinpath(outdir, atlasNameBase * tag * ".jsonl" * compress)
+ensure_writable(output_file_path, "w"; overwrite=overwrite_output)  # Writer defaults to "w"
 writer = Writer(measure, constraints, partition, output_file_path;
                 weight_type=Float64, output_districting=output_districting,
                 description=description, config_file=args[:toml_config_file])

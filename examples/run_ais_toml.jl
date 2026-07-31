@@ -18,10 +18,14 @@ using CycleWalk
 using TOML, UnPack
 using LinearAlgebra
 
+include("parameterUtils.jl") # parameter_tag / ensure_writable / take_flag!
+
 # ---------------------------------------------------------------------------
 # parse config
 # ---------------------------------------------------------------------------
-length(ARGS) >= 1 || error("usage: julia -t N run_ais_toml.jl <config.toml>")
+overwrite_output = take_flag!(ARGS, "--overwrite")
+length(ARGS) >= 1 ||
+    error("usage: julia -t N run_ais_toml.jl <config.toml> [--overwrite]")
 params = TOML.parsefile(ARGS[1])
 
 # [plans]
@@ -130,9 +134,13 @@ gamma       > 0 && (atlasName *= "_gamma" * string(gamma))
 iso_weight  > 0 && (atlasName *= "_iso" * string(iso_weight))
 gamma_start > 0 && (atlasName *= "_gammastart" * string(gamma_start))
 iso_start   > 0 && (atlasName *= "_isostart" * string(iso_start))
+# …and every other parameter the measure reads, so a sweep over one of them does not
+# write every point to a single path
+atlasName *= parameter_tag(measure_specs, measure_params)
 atlasName *= ".jsonl" * compress
 output_file_path = joinpath(outputDirectory..., atlasName)
 mkpath(dirname(output_file_path))
+ensure_writable(output_file_path, io_mode; overwrite=overwrite_output)
 
 ad_param = Dict{String, Any}("popdev" => pop_dev)
 writer = Writer(measure, constraints, partition, output_file_path;

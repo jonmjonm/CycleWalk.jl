@@ -413,6 +413,26 @@ A spec whose target `weight` is zero but whose `weight_start` is not is kept in 
 measure (`push_energy!`'s `allow_zero`), because an energy annealed *down* to zero
 must be present for a schedule to ramp it.
 
+### `weight_expression_parameters` / `referenced_parameters`
+
+```julia
+weight_expression_parameters(expr::AbstractString)::Vector{String}
+referenced_parameters(specs::AbstractVector{EnergySpec})::Vector{String}
+```
+
+The names an expression reads, and the union of those across a measure's specs —
+sorted, without repeats. A weight written as a plain number reads nothing.
+
+`weight_expression_parameters` is the *same walk over the same parsed tree* as
+`evaluate_weight_expression`, with names collected instead of looked up, so it refuses
+exactly what evaluating refuses. It deliberately does not require the names to exist,
+since it is called on a config before a run's parameters are assembled.
+
+This is what decides a run's file name: a parameter no expression names cannot change
+the target, while one that is named must appear in the name, or two runs differing
+only in it would compute the same output path and the second would overwrite the
+first.
+
 ### `evaluate_weight_expression`
 
 ```julia
