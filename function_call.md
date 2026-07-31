@@ -314,6 +314,93 @@ weight, and a score that never entered `measure.scores` can never be annealed �
 score costs nothing per step (`get_log_energy` skips zero weights when it
 evaluates), but it does appear in the Atlas header's energy list with weight `0`.
 
+### `build_measure` / `energy_specs` / `measure_parameters`
+
+Build a `Measure` from a config file rather than from code.
+
+```julia
+build_measure(measure_config::AbstractDict; context=(;))::Measure
+build_measure(specs::AbstractVector{EnergySpec}, parameters::AbstractDict;
+              context=(;))::Measure
+
+energy_specs(measure_config::AbstractDict)::Vector{EnergySpec}
+measure_parameters(measure_config::AbstractDict)::Dict{String, Any}
+energy_weight(specs, name, parameters)::Float64
+annealing_weights(specs, parameters)::Dict{String, Tuple{Float64, Float64}}
+```
+
+`energy_weight` names a weight by what it *is* rather than by the config key it came
+from. `gamma` is the weight in front of the log spanning-forest energy and
+`iso_weight` the one in front of the Polsby-Popper score, so
+
+```julia
+gamma      = energy_weight(specs, "get_log_spanning_forests", parameters)
+iso_weight = energy_weight(specs, "get_isoperimetric_score",  parameters)
+```
+
+reports the real thing whichever form the config was written in. The example runners
+tag the atlas filename with these (`_gamma1.0`, `_iso0.3`); reading a `[measure]` key
+called `gamma` instead would let that tag disagree with the measure the run actually
+sampled. Returns `0.0` when the measure has no such energy.
+
+The explicit form names each energy and how it is weighted:
+
+```toml
+[measure]
+gamma = 1.0
+vra_weight = 2.0                 # any numeric scalar here is a named parameter
+
+[[measure.energy]]
+name   = "get_log_spanning_forests"
+weight = "gamma"                 # a number, or arithmetic over the parameters
+
+[[measure.energy]]
+name   = "get_log_district_trees"
+weight = "2*gamma + 1"
+
+[[measure.energy]]
+name    = "build_get_partisan_margins"
+args    = ["PRES16_D", "PRES16_R"]
+weight  = "vra_weight"
+desc    = "partisan margins (PRES16)"
+```
+
+| Key | Meaning |
+| --- | --- |
+| `name` | An energy **exported** by `CycleWalk`, or a builder returning one. |
+| `weight` | A number, or an expression over the parameters (see `evaluate_weight_expression`). |
+| `weight_start` | The weight at the start of an annealing schedule; absent means the energy does not anneal. |
+| `args` / `kwargs` | Literal arguments for a builder. |
+| `context` | Names of values the *runner* supplies (`graph`, `num_dists`, …), prepended to `args`. A config cannot write a graph down. |
+| `desc` | The label in the Atlas header. Matters for builders: a built energy is a closure, whose automatic label is `#7#8`. |
+
+The older short form is **translated** into the explicit one rather than handled
+separately, so both run down one path and existing configs — including those read
+back out of Atlas headers by `run_cyclewalk_extend.jl` — keep working:
+
+```toml
+[measure]
+measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
+gamma = 1.0
+iso_weight = 0.3
+[measure.weights]                 # for scores gamma/iso_weight do not cover
+get_log_district_trees = "2*gamma + 1"
+```
+
+`"get_log_spanning_forests"` becomes a spec weighted by the expression `"gamma"`. A
+config carrying both forms is an error rather than a guess.
+
+Refused with a message naming the cause: an unexported or unknown `name`, an unknown
+key (a typo would otherwise silently change the target), a missing `name`/`weight`,
+a builder whose arguments do not fit, context the run does not provide, and two specs
+resolving to the same function — `Measure` is keyed by function, so the second would
+replace the first. Builders are exempt from that last one, since each call returns a
+distinct closure.
+
+A spec whose target `weight` is zero but whose `weight_start` is not is kept in the
+measure (`push_energy!`'s `allow_zero`), because an energy annealed *down* to zero
+must be present for a schedule to ramp it.
+
 ### `evaluate_weight_expression`
 
 ```julia

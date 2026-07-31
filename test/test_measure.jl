@@ -56,6 +56,233 @@
     end
 end
 
+@testset "measure specs" begin
+    short_form = Dict{String, Any}(
+        "gamma" => 1.5,
+        "iso_weight" => 0.4,
+        "measure_scores" => ["get_log_spanning_forests", "get_isoperimetric_score"])
+
+    @testset "parameters are every numeric scalar under [measure]" begin
+        cfg = Dict{String, Any}("gamma" => 1.5, "iso_weight" => 0.0, "n" => 3,
+                                "label" => "text", "flag" => true,
+                                "measure_scores" => ["get_log_spanning_forests"],
+                                "weights" => Dict{String, Any}("x" => 1))
+        pars = measure_parameters(cfg)
+        @test Set(keys(pars)) == Set(["gamma", "iso_weight", "n"])
+        @test pars["gamma"] == 1.5
+    end
+
+    @testset "the short form is translated, not special-cased" begin
+        specs = energy_specs(short_form)
+        @test [s.name for s in specs] ==
+              ["get_log_spanning_forests", "get_isoperimetric_score"]
+        # the two named scores bind to the parameters they always did — as
+        # expressions, so nothing downstream needs to know they are special
+        @test [s.weight for s in specs] == ["gamma", "iso_weight"]
+        @test all(s.weight_start === nothing for s in specs)
+    end
+
+    @testset "short and explicit forms produce the same measure" begin
+        explicit = Dict{String, Any}(
+            "gamma" => 1.5, "iso_weight" => 0.4,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma"),
+                Dict{String, Any}("name" => "get_isoperimetric_score",
+                                  "weight" => "iso_weight")])
+        a = build_measure(short_form)
+        b = build_measure(explicit)
+        @test a.scores == b.scores
+        @test a.weights == b.weights
+        @test a.weights[get_log_spanning_forests] == 1.5
+        @test a.weights[get_isoperimetric_score] == 0.4
+    end
+
+    @testset "a weight may be a number or an expression" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 2.0,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "2*gamma + 1"),
+                Dict{String, Any}("name" => "get_isoperimetric_score",
+                                  "weight" => 0.25)])
+        m = build_measure(cfg)
+        @test m.weights[get_log_spanning_forests] == 5.0
+        @test m.weights[get_isoperimetric_score] == 0.25
+    end
+
+    @testset "weight_start keeps an energy annealed down to zero" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 0.0, "gamma_start" => 0.5,
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => "gamma",
+                                           "weight_start" => "gamma_start")])
+        specs = energy_specs(cfg)
+        m = build_measure(cfg)
+        # zero target weight, but present so a schedule can ramp it
+        @test get_log_spanning_forests in m.scores
+        @test m.weights[get_log_spanning_forests] == 0.0
+        @test keys(m.weights) == m.scores
+        @test annealing_weights(specs, measure_parameters(cfg)) ==
+              Dict("get_log_spanning_forests" => (0.5, 0.0))
+
+        # without a weight_start the zero-weight energy is dropped as before
+        plain = Dict{String, Any}(
+            "gamma" => 0.0,
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => "gamma")])
+        @test isempty(build_measure(plain).scores)
+        @test isempty(annealing_weights(energy_specs(plain),
+                                        measure_parameters(plain)))
+    end
+
+    @testset "a builder is called with its configured arguments" begin
+        cfg = Dict{String, Any}(
+            "energy" => [Dict{String, Any}(
+                "name" => "build_get_partisan_margins",
+                "args" => ["dem", "rep"],
+                "weight" => 1.0,
+                "desc" => "partisan margins")])
+        m = build_measure(cfg)
+        @test length(m.scores) == 1
+        f = first(m.scores)
+        # a built energy is a closure; the desc is what keeps the header readable
+        @test m.descriptions[f] == "partisan margins"
+
+        # with no desc, the builder's name is used rather than the closure's
+        nodesc = Dict{String, Any}(
+            "energy" => [Dict{String, Any}(
+                "name" => "build_get_partisan_margins",
+                "args" => ["dem", "rep"], "weight" => 1.0)])
+        m2 = build_measure(nodesc)
+        @test m2.descriptions[first(m2.scores)] == "build_get_partisan_margins"
+    end
+
+    @testset "the same builder may appear more than once" begin
+        cfg = Dict{String, Any}(
+            "energy" => [
+                Dict{String, Any}("name" => "build_get_partisan_margins",
+                                  "args" => ["dem16", "rep16"], "weight" => 1.0,
+                                  "desc" => "2016"),
+                Dict{String, Any}("name" => "build_get_partisan_margins",
+                                  "args" => ["dem20", "rep20"], "weight" => 2.0,
+                                  "desc" => "2020")])
+        m = build_measure(cfg)
+        @test length(m.scores) == 2          # distinct closures, not a collision
+        @test Set(values(m.descriptions)) == Set(["2016", "2020"])
+        @test Set(values(m.weights)) == Set([1.0, 2.0])
+    end
+
+    @testset "the same plain energy twice is an error" begin
+        cfg = Dict{String, Any}(
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => 1.0),
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => 2.0)])
+        # Measure is keyed by function, so the second would silently replace the first
+        @test_throws ArgumentError build_measure(cfg)
+    end
+
+    @testset "context supplies what a config cannot write down" begin
+        # build_performant_vra_score's first argument is a graph
+        cfg = Dict{String, Any}(
+            "energy" => [Dict{String, Any}(
+                "name" => "build_performant_vra_score",
+                "context" => ["graph"],
+                "args" => [[(("pop",), ("pop",))]],
+                "kwargs" => Dict{String, Any}("target_districts" => 1),
+                "weight" => 1.0,
+                "desc" => "vra")])
+        m = build_measure(cfg; context=(graph=small_square_base_graph,))
+        @test length(m.scores) == 1
+        @test m.descriptions[first(m.scores)] == "vra"
+
+        # asking for context the run does not provide names what is available
+        err = try build_measure(cfg; context=(num_dists=4,)); nothing catch e; e end
+        @test err isa ArgumentError
+        @test occursin("graph", err.msg)
+        @test occursin("num_dists", err.msg)
+    end
+
+    @testset "bad configs are refused with a message that says why" begin
+        both = Dict{String, Any}("gamma" => 1.0,
+                                 "measure_scores" => ["get_log_spanning_forests"],
+                                 "energy" => [Dict{String, Any}(
+                                     "name" => "get_log_spanning_forests",
+                                     "weight" => 1.0)])
+        @test_throws ArgumentError energy_specs(both)
+
+        for bad in [
+            Dict{String, Any}("energy" => [Dict{String, Any}("weight" => 1.0)]),
+            Dict{String, Any}("energy" => [Dict{String, Any}("name" => "x")]),
+            Dict{String, Any}("energy" => [Dict{String, Any}(
+                "name" => "get_log_spanning_forests", "weight" => 1.0,
+                "wieght" => 2.0)]),                      # typo'd key
+            Dict{String, Any}("energy" => Dict{String, Any}("name" => "x")),
+        ]
+            @test_throws ArgumentError energy_specs(bad)
+        end
+
+        # a name CycleWalk does not export, including an internal one
+        unexported = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_district_roots", "weight" => 1.0)])
+        @test isdefined(CycleWalk, :get_district_roots)      # it exists…
+        @test !(:get_district_roots in names(CycleWalk))     # …but is not exported
+        @test_throws ArgumentError build_measure(unexported)
+
+        nonesuch = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_nonexistent_score", "weight" => 1.0)])
+        @test_throws ArgumentError build_measure(nonesuch)
+
+        # a builder whose configured arguments do not fit
+        badargs = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "build_get_partisan_margins",
+            "args" => ["only_one"], "weight" => 1.0)])
+        @test_throws ArgumentError build_measure(badargs)
+
+        # an unknown parameter in a weight expression
+        badweight = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => "not_a_parameter")])
+        @test_throws ArgumentError build_measure(badweight)
+    end
+
+    @testset "gamma is the weight on the forest energy, not a config key" begin
+        # gamma names something specific — the weight in front of the log
+        # spanning-forest energy — and the atlas filename is tagged with it, so it is
+        # read off the measure rather than out of a [measure] key that could disagree.
+        mismatched = Dict{String, Any}(
+            "gamma" => 1.0,                       # a key that says one thing…
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => 0.3)])   # …the measure another
+        specs = energy_specs(mismatched)
+        pars = measure_parameters(mismatched)
+        @test energy_weight(specs, "get_log_spanning_forests", pars) == 0.3
+        @test build_measure(mismatched).weights[get_log_spanning_forests] == 0.3
+
+        # the short form agrees with the key, because there the key is what binds
+        @test energy_weight(energy_specs(short_form), "get_log_spanning_forests",
+                            measure_parameters(short_form)) == 1.5
+        @test energy_weight(energy_specs(short_form), "get_isoperimetric_score",
+                            measure_parameters(short_form)) == 0.4
+
+        # an energy the measure does not have weighs nothing
+        @test energy_weight(specs, "get_isoperimetric_score", pars) == 0.0
+        # and it resolves through an expression like any other weight
+        expr = Dict{String, Any}(
+            "gamma" => 2.0,
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => "3*gamma")])
+        @test energy_weight(energy_specs(expr), "get_log_spanning_forests",
+                            measure_parameters(expr)) == 6.0
+    end
+
+    @testset "an empty [measure] gives an empty measure" begin
+        @test isempty(energy_specs(Dict{String, Any}()))
+        @test isempty(build_measure(Dict{String, Any}()).scores)
+    end
+end
+
 # A callable the expression tests can watch: if the evaluator ever invokes a function
 # named in an expression, this counter moves.
 const EXPRESSION_PROBE = Ref(0)

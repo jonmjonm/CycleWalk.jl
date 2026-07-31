@@ -38,8 +38,9 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(two_cycle_walk_frac, cycle_walk), 
             (1.0-two_cycle_walk_frac, internal_walk)]
 
-measure = build_measure(measure_scores, gamma, iso_weight;
-                        weights=measure_weights, knobs=measure_knobs)
+measure = build_measure(measure_specs, measure_params;
+                        context=(graph=graph, base_graph=base_graph,
+                                 num_dists=num_dists, pop_col=pop_col))
 
 @show output_file_path
 writer = Writer(measure, constraints, partition, output_file_path;
