@@ -158,7 +158,11 @@ function _explicit_specs(entries)
 end
 
 # The short form's two named scores are weighted by the parameters they have always
-# been weighted by; everything else takes its weight from [measure.weights].
+# been weighted by; everything else takes its weight from [measure.weights]. It exists
+# for the configs of released runs — every Atlas the sampler has written embeds one,
+# and `examples/run_cyclewalk_extend.jl` reads them back to extend those runs — so it
+# only ever describes a target. An annealing base is a `weight_start` in the explicit
+# form; the short form has no way to say one.
 const _SHORT_FORM_PARAMETERS = Dict("get_log_spanning_forests" => "gamma",
                                     "get_isoperimetric_score"  => "iso_weight")
 
@@ -272,8 +276,46 @@ arguments.
 function build_measure(specs::AbstractVector{EnergySpec},
                        parameters::AbstractDict;
                        context=(;))
+    measure, _ = _build_measure(specs, parameters, context, nothing)
+    return measure
+end
+
+"""
+    build_annealed_measure(specs, parameters; context=(;), default_start=0.0)
+        -> (measure, ramp)
+
+Build the target [`Measure`](@ref) as [`build_measure`](@ref) does, and alongside it
+the schedule an annealing run ramps along: `ramp` maps each energy *function* in the
+measure to its `(start, target)` weight.
+
+Keyed by function rather than by name because that is what a schedule has to write
+into `measure.weights`, and because a built energy has no name to look up — two specs
+naming one builder resolve to two distinct closures, and re-resolving them later would
+produce two more that the measure has never seen.
+
+An energy with no `weight_start` starts from `default_start`, zero by default: for
+[`run_annealed_importance_sampling!`](@ref) and [`run_annealed_smc!`](@ref) that is the
+base measure the base chain samples, and zero recovers the spanning-forest base. An
+energy whose target weight is zero but whose start is not is kept in the measure (see
+[`push_energy!`](@ref)'s `allow_zero`), since a schedule cannot ramp an energy the
+measure does not have.
+"""
+function build_annealed_measure(specs::AbstractVector{EnergySpec},
+                                parameters::AbstractDict;
+                                context=(;),
+                                default_start::Real=0.0)
+    return _build_measure(specs, parameters, context, Float64(default_start))
+end
+
+# Resolve every spec once. `default_start === nothing` means "not an annealing run":
+# no ramp is collected and only an explicit weight_start affects `allow_zero`.
+function _build_measure(specs::AbstractVector{EnergySpec},
+                        parameters::AbstractDict,
+                        context,
+                        default_start::Union{Float64, Nothing})
     measure = Measure()
     seen = Dict{Function, String}()
+    ramp = Dict{Function, Tuple{Float64, Float64}}()
     for spec in specs
         energy, label = resolve_energy_function(spec, context)
         if haskey(seen, energy)
@@ -283,14 +325,18 @@ function build_measure(specs::AbstractVector{EnergySpec},
         seen[energy] = spec.name
 
         weight = resolve_energy_weight(spec.weight, parameters, spec.name)
-        allow_zero = false
-        if spec.weight_start !== nothing
-            start = resolve_energy_weight(spec.weight_start, parameters, spec.name)
-            allow_zero = start != 0
+        start = if spec.weight_start !== nothing
+            resolve_energy_weight(spec.weight_start, parameters, spec.name)
+        else
+            default_start
         end
+        allow_zero = start !== nothing && start != 0
         push_energy!(measure, energy, weight; desc=label, allow_zero=allow_zero)
+        # a score push_energy! dropped is not in the measure, so nothing may ramp it
+        default_start === nothing || energy in measure.scores || continue
+        default_start === nothing || (ramp[energy] = (start, weight))
     end
-    return measure
+    return measure, ramp
 end
 
 """
@@ -324,6 +370,25 @@ function energy_weight(specs::AbstractVector{EnergySpec}, name::AbstractString,
     for spec in specs
         spec.name == name &&
             return resolve_energy_weight(spec.weight, parameters, spec.name)
+    end
+    return 0.0
+end
+
+"""
+    energy_weight_start(specs, name, parameters) -> Float64
+
+The weight the energy called `name` starts an annealing schedule from, or `0.0` when
+it has no `weight_start` (or the measure has no such energy) — the base an annealing
+run ramps up from. The counterpart of [`energy_weight`](@ref), which reports where the
+same energy ends up.
+"""
+function energy_weight_start(specs::AbstractVector{EnergySpec}, name::AbstractString,
+                             parameters::AbstractDict)
+    for spec in specs
+        if spec.name == name
+            spec.weight_start === nothing && return 0.0
+            return resolve_energy_weight(spec.weight_start, parameters, spec.name)
+        end
     end
     return 0.0
 end

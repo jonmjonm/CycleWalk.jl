@@ -277,6 +277,78 @@ end
                             measure_parameters(expr)) == 6.0
     end
 
+    @testset "build_annealed_measure returns the schedule alongside the measure" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 1.0, "iso_weight" => 0.3,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma", "weight_start" => 0.5),
+                Dict{String, Any}("name" => "get_isoperimetric_score",
+                                  "weight" => "iso_weight",
+                                  "weight_start" => "0.1*iso_weight")])
+        specs = energy_specs(cfg)
+        m, ramp = build_annealed_measure(specs, measure_parameters(cfg))
+        @test ramp[get_log_spanning_forests] == (0.5, 1.0)
+        @test ramp[get_isoperimetric_score] == (0.03, 0.3)
+        # the ramp is keyed by the very functions the measure holds
+        @test Set(keys(ramp)) == m.scores
+
+        # an energy with no weight_start starts from default_start (0 for annealing)
+        plain = energy_specs(Dict{String, Any}(
+            "energy" => [Dict{String, Any}("name" => "get_log_spanning_forests",
+                                           "weight" => 2.0)]))
+        _, r2 = build_annealed_measure(plain, Dict{String, Any}())
+        @test r2[get_log_spanning_forests] == (0.0, 2.0)
+        _, r3 = build_annealed_measure(plain, Dict{String, Any}(); default_start=1.0)
+        @test r3[get_log_spanning_forests] == (1.0, 2.0)
+
+        # build_measure collects no ramp and is unaffected by weight_start
+        @test build_measure(specs, measure_parameters(cfg)).weights ==
+              m.weights
+    end
+
+    @testset "the short form only ever describes a target" begin
+        # It exists for the configs of released runs, which are always plain MCMC
+        # targets; an annealing base is a weight_start in the explicit form, and the
+        # short form has no way to say one.
+        cfg = Dict{String, Any}(
+            "gamma" => 1.0, "iso_weight" => 0.3,
+            "gamma_start" => 0.5, "iso_start" => 0.1,   # not part of the short form
+            "measure_scores" => ["get_log_spanning_forests",
+                                 "get_isoperimetric_score"])
+        specs = energy_specs(cfg)
+        @test all(s.weight_start === nothing for s in specs)
+        pars = measure_parameters(cfg)
+        @test energy_weight_start(specs, "get_log_spanning_forests", pars) == 0.0
+        _, ramp = build_annealed_measure(specs, pars)
+        @test ramp[get_log_spanning_forests] == (0.0, 1.0)   # the default base
+    end
+
+    @testset "an energy annealed down to zero survives into the ramp" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 0.0, "iso_weight" => 0.3,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma", "weight_start" => 0.5),
+                Dict{String, Any}("name" => "get_isoperimetric_score",
+                                  "weight" => "iso_weight")])
+        m, ramp = build_annealed_measure(energy_specs(cfg), measure_parameters(cfg))
+        @test get_log_spanning_forests in m.scores
+        @test ramp[get_log_spanning_forests] == (0.5, 0.0)
+        @test keys(m.weights) == m.scores
+
+        # zero the whole way is still dropped, and so cannot be ramped
+        gone = Dict{String, Any}(
+            "gamma" => 0.0, "iso_weight" => 0.3,
+            "measure_scores" => ["get_log_spanning_forests",
+                                 "get_isoperimetric_score"])
+        m2, ramp2 = build_annealed_measure(energy_specs(gone),
+                                           measure_parameters(gone))
+        @test !(get_log_spanning_forests in m2.scores)
+        @test !haskey(ramp2, get_log_spanning_forests)
+        @test Set(keys(ramp2)) == m2.scores
+    end
+
     @testset "an empty [measure] gives an empty measure" begin
         @test isempty(energy_specs(Dict{String, Any}()))
         @test isempty(build_measure(Dict{String, Any}()).scores)

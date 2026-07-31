@@ -1,8 +1,21 @@
 # Annealed SMC config for NC (14 districts). Run with:
 #   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml
-# Any [smc]/[measure] value can be overridden on the CLI, e.g.
-#   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml --particles 2048 --rejuv 3000
-# (CLI flags win over the TOML values below.)
+# Any [smc]/[measure]
+# Annealing endpoints: each energy's `weight` is its TARGET (t=1) and its
+# `weight_start` the BASE the base chain samples at t=0 (default 0, which recovers the
+# spanning-forest base). A weight may also be arithmetic over the parameters above.
+gamma = 0.25
+iso_weight = 0.3
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+# weight_start = 0.0
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+# weight_start = 0.0
 
 [plans]
 pop_dev = 0.02

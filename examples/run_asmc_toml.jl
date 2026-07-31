@@ -77,11 +77,23 @@ node_border_col    = get(params["plans"], "node_border_col", nothing)
 edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
 num_dists = Int(num_dists)
 
-@unpack gamma, iso_weight = params["measure"]
-gamma_start = Float64(get(params["measure"], "gamma_start", 0.0))
-iso_start   = Float64(get(params["measure"], "iso_start",   0.0))
-measure_scores = get(params["measure"], "measure_scores",
-                     ["get_log_spanning_forests", "get_isoperimetric_score"])
+# Each energy's `weight` is its target (t=1) and its `weight_start` the base (t=0).
+# The older gamma/iso_weight + gamma_start/iso_start form reads as the same thing (see
+# `energy_specs`), so existing configs are unaffected.
+haskey(params, "measure") || (params["measure"] = Dict{String, Any}())
+haskey(params["measure"], "measure_scores") ||
+    haskey(params["measure"], "energy") ||
+    (params["measure"]["measure_scores"] = ["get_log_spanning_forests",
+                                            "get_isoperimetric_score"])
+measure_specs  = energy_specs(params["measure"])
+measure_params = measure_parameters(params["measure"])
+# read off the measure, not out of a config key, so the atlas name cannot disagree
+gamma       = energy_weight(measure_specs, "get_log_spanning_forests", measure_params)
+iso_weight  = energy_weight(measure_specs, "get_isoperimetric_score",  measure_params)
+gamma_start = energy_weight_start(measure_specs, "get_log_spanning_forests",
+                                  measure_params)
+iso_start   = energy_weight_start(measure_specs, "get_isoperimetric_score",
+                                  measure_params)
 
 s = params["smc"]
 schedule_kind = get(s, "schedule", "fixed")
@@ -127,27 +139,20 @@ proposal = [(two_cycle_walk_frac, cycle_walk), (1.0 - two_cycle_walk_frac, inter
 # weight (gamma_start/iso_start, default 0) at t=0 to its target at t=1. A term is
 # annealed if either endpoint is nonzero.
 # ---------------------------------------------------------------------------
-target_weight = Dict{String,Float64}("get_log_spanning_forests" => gamma,
-                                     "get_isoperimetric_score"   => iso_weight)
-base_weight   = Dict{String,Float64}("get_log_spanning_forests" => gamma_start,
-                                     "get_isoperimetric_score"   => iso_start)
-measure = Measure()
-for sc in measure_scores
-    haskey(target_weight, sc) || error("unsupported measure score \"$sc\"")
-    # The guard skips an energy that is zero the whole way; allow_zero keeps one that
-    # is annealed *down to* zero, which has a zero target weight but must still be in
-    # measure.scores for the path to ramp it (see push_energy!).
-    (target_weight[sc] > 0 || base_weight[sc] > 0) &&
-        push_energy!(measure, getfield(CycleWalk, Symbol(sc)), target_weight[sc];
-                     allow_zero = base_weight[sc] != 0)
-end
+# The target measure, plus the (base, target) weight of every energy in it. An energy
+# that is zero the whole way is dropped by push_energy!; one annealed *down to* zero is
+# kept (allow_zero), since the path cannot ramp an energy the measure does not have.
+measure, ramp = build_annealed_measure(measure_specs, measure_params;
+                                       context=(graph=graph, num_dists=num_dists,
+                                                pop_col=pop_col))
 
 # Linear path from base weights (t=0) to target weights (t=1), aligned to the exact
 # `scores` order the driver freezes. All-zero base recovers the default linear_path.
+# `ramp` is keyed by the energy function, which is what `scores` holds — no lookup
+# back through a name, which a built energy would not have.
 scores, target_w = annealed_smc_scores_and_targets(measure)
 K = length(scores)
-name_of = Dict(getfield(CycleWalk, Symbol(sc)) => sc for sc in measure_scores)
-base_w  = ntuple(k -> base_weight[name_of[scores[k]]], K)
+base_w  = ntuple(k -> ramp[scores[k]][1], K)
 path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]), K))
 
 # ---------------------------------------------------------------------------

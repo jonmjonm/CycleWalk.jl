@@ -326,8 +326,20 @@ build_measure(specs::AbstractVector{EnergySpec}, parameters::AbstractDict;
 energy_specs(measure_config::AbstractDict)::Vector{EnergySpec}
 measure_parameters(measure_config::AbstractDict)::Dict{String, Any}
 energy_weight(specs, name, parameters)::Float64
+energy_weight_start(specs, name, parameters)::Float64
 annealing_weights(specs, parameters)::Dict{String, Tuple{Float64, Float64}}
+
+build_annealed_measure(specs, parameters; context=(;),
+                       default_start=0.0)::Tuple{Measure, Dict}
 ```
+
+`build_annealed_measure` returns the target measure *and* the schedule to ramp along:
+a `Dict` from each energy **function** in the measure to its `(start, target)` weight.
+Keyed by function because that is what a schedule writes into `measure.weights`, and
+because a built energy has no name to look up — re-resolving a builder later would
+produce a different closure than the one the measure holds. An energy with no
+`weight_start` starts from `default_start` (zero: the spanning-forest base). This is
+what `run_ais_toml.jl` and `run_asmc_toml.jl` build their ramp and `LinearPath` from.
 
 `energy_weight` names a weight by what it *is* rather than by the config key it came
 from. `gamma` is the weight in front of the log spanning-forest energy and
