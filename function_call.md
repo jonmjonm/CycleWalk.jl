@@ -300,10 +300,45 @@ weighted energy/score functions.
 ### `push_energy!`
 
 ```julia
-push_energy!(measure::Measure, score::Function, weight::Real; desc::String="")
+push_energy!(measure::Measure, score::Function, weight::Real; desc::String="",
+             allow_zero::Bool=false)
 ```
 
 Add a weighted score function to the measure. A zero weight is ignored.
+
+Pass `allow_zero=true` to keep a zero-weight score anyway. An annealing schedule
+needs this: a run that ramps an energy's weight *down to* zero has a zero target
+weight, and a score that never entered `measure.scores` can never be annealed —
+`get_log_energy` sums over `scores`, so a weight written straight into
+`measure.weights` for a score outside that set is silently ignored. Keeping the
+score costs nothing per step (`get_log_energy` skips zero weights when it
+evaluates), but it does appear in the Atlas header's energy list with weight `0`.
+
+### `evaluate_weight_expression`
+
+```julia
+evaluate_weight_expression(expr::AbstractString, parameters::AbstractDict)::Float64
+```
+
+Evaluate an arithmetic expression over named parameters, for measure weights written
+in a config file rather than in code:
+
+```julia
+evaluate_weight_expression("2*gamma + 1", Dict("gamma" => 1.5))   # 4.0
+```
+
+Only `+ - * / ^`, numeric literals, and names present in `parameters` are permitted.
+Anything else — a function call, an index, a field access, a second statement, an
+unknown name — raises an `ArgumentError` naming what was rejected.
+
+The expression is parsed to an AST and then **interpreted**; it is never `eval`ed, so
+`"run(\`rm -rf /\`)"` is refused at inspection time rather than run. This matters
+because these expressions arrive in config files, which CycleWalk reads back out of
+Atlas headers written elsewhere. Expressions nesting deeper than
+`CycleWalk.MAX_WEIGHT_EXPRESSION_DEPTH` (16) or larger than
+`CycleWalk.MAX_WEIGHT_EXPRESSION_NODES` (100) are rejected, as is any result that is
+not a finite real — an `Inf` or `NaN` weight would silently change the target rather
+than fail.
 
 ### `get_log_energy`
 

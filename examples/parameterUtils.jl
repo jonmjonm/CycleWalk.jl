@@ -45,6 +45,10 @@ function derive_params(
     measure_scores     = get(params["measure"], "measure_scores", [])
     # per-score weights for anything gamma/iso_weight do not cover (see build_measure)
     measure_weights    = get(params["measure"], "weights", Dict{String, Any}())
+    # every numeric scalar under [measure] is a parameter a weight expression may use,
+    # so gamma and iso_weight are available to one without being named specially
+    measure_knobs      = Dict{String, Any}(k => v for (k, v) in params["measure"]
+                                           if v isa Real && !(v isa Bool))
     writer_stats       = get(params["plans"], "writer_stats", [])
     area_col           = get(params["plans"], "area_col", nothing)
     node_border_col    = get(params["plans"], "node_border_col", nothing)
@@ -95,8 +99,8 @@ function derive_params(
     return (; gamma, iso_weight, cycle_walk_steps, two_cycle_walk_frac,
             outputDirectory, atlasNameBase, thread_id, cycle_walk_out_freq,
             map_directory, map_file, num_dists, pop_dev, node_data, pop_col,
-            geo_units, measure_scores, measure_weights, writer_stats, area_col,
-            node_border_col,
+            geo_units, measure_scores, measure_weights, measure_knobs, writer_stats,
+            area_col, node_border_col,
             edge_perimeter_col, compress, output_districting, io_mode,
             description, rng_seed_base, blas_threads, run_diagnostics_flag,
             rng_seed, steps, outfreq, atlasName, output_file_path, pctGraphPath,
@@ -121,7 +125,30 @@ function print_params(p)
 end
 
 """
-    build_measure(measure_scores, gamma, iso_weight; weights=Dict()) -> Measure
+    resolve_weight(value, knobs, score_name) -> Float64
+
+Turn a configured weight into a number: a TOML number is taken as written, a TOML
+string is an arithmetic expression over `knobs` (see
+[`evaluate_weight_expression`](@ref)). `score_name` only names the score in error
+messages.
+"""
+function resolve_weight(value, knobs::AbstractDict, score_name::AbstractString)
+    value isa Real && !(value isa Bool) && return Float64(value)
+    if value isa AbstractString
+        try
+            return evaluate_weight_expression(value, knobs)
+        catch err
+            err isa ArgumentError || rethrow()
+            error("weight for measure score \"$score_name\": $(err.msg)")
+        end
+    end
+    error("weight for measure score \"$score_name\" is $(repr(value)); expected a " *
+          "number or an expression over the [measure] parameters")
+end
+
+"""
+    build_measure(measure_scores, gamma, iso_weight; weights=Dict(), knobs=Dict())
+        -> Measure
 
 Assemble the run's [`Measure`](@ref) from the TOML's `measure_scores` list: the log
 spanning-forest count is weighted by `gamma`, the Polsby-Popper score by `iso_weight`,
@@ -130,12 +157,20 @@ read from the config's optional `[measure.weights]` table:
 
 ```toml
 [measure]
-measure_scores = ["get_log_spanning_forests", "get_log_district_trees"]
+measure_scores = ["get_log_spanning_forests", "get_log_district_trees",
+                  "get_log_linking_edges"]
 gamma = 1.0
 
 [measure.weights]
-get_log_district_trees = 0.5
+get_log_district_trees = 0.5           # a plain number
+get_log_linking_edges  = "2*gamma + 1" # or arithmetic over the [measure] parameters
 ```
+
+A weight given as a string is an arithmetic expression over `knobs` — every numeric
+scalar under `[measure]`, so `gamma` and `iso_weight` are always available — evaluated
+by [`evaluate_weight_expression`](@ref). That lets a second energy ride a swept knob
+(`--gamma` on the command line moves both) without inventing a config key for it. Only
+`+ - * / ^` are permitted, and the expression is interpreted rather than `eval`ed.
 
 There is no default weight — `push_energy!` requires one, and guessing would silently
 change the target — so a score outside the two named above with no entry in `weights`
@@ -146,7 +181,8 @@ configured with zero weight contributes nothing and does not appear in the Atlas
 header's energy list.
 """
 function build_measure(measure_scores, gamma, iso_weight;
-                       weights::AbstractDict=Dict{String, Any}())
+                       weights::AbstractDict=Dict{String, Any}(),
+                       knobs::AbstractDict=Dict{String, Any}())
     measure = Measure()
     for fnct_str in measure_scores
         if fnct_str=="get_log_spanning_forests"
@@ -163,7 +199,8 @@ function build_measure(measure_scores, gamma, iso_weight;
             fnct = getfield(CycleWalk, Symbol(fnct_str))
             fnct isa Function || error(
                 "measure score \"$fnct_str\" is not a function")
-            push_energy!(measure, fnct, weights[fnct_str])
+            push_energy!(measure, fnct, resolve_weight(weights[fnct_str], knobs,
+                                                       fnct_str))
         end
     end
     return measure

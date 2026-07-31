@@ -145,6 +145,7 @@ export AbstractGraph,
     # energies/observables
     Measure,
     push_energy!,
+    evaluate_weight_expression,
     get_log_energy,
     get_log_spanning_trees,
     get_log_spanning_forests,
@@ -221,6 +222,7 @@ include("./measure/constraints/budgeted_region_constraint/budgeted_region_constr
 include("./measure/constraints/balance.jl")
 
 include("./measure/measure.jl")
+include("./measure/weight_expressions.jl")
 include("./measure/energy/defaults.jl")
 include("./measure/energy/log_forest_count.jl")
 include("./measure/energy/polsby_popper.jl")
