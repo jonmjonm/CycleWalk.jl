@@ -32,14 +32,27 @@ node_border_col    = get(params["plans"], "node_border_col", nothing)
 edge_perimeter_col = get(params["plans"], "edge_perimeter_col", nothing)
 num_dists = Int(num_dists)
 
-# [measure] — `gamma`/`iso_weight` are the ANNEALING TARGETS (t=1). `gamma_start`/
-# `iso_start` (default 0) are the BASE measure the base chain samples (t=0); the base
-# chain must be able to mix under them. Default 0/0 recovers the spanning-forest base.
-@unpack gamma, iso_weight = params["measure"]
-gamma_start = Float64(get(params["measure"], "gamma_start", 0.0))
-iso_start   = Float64(get(params["measure"], "iso_start",   0.0))
-measure_scores = get(params["measure"], "measure_scores",
-                     ["get_log_spanning_forests", "get_isoperimetric_score"])
+# [measure] — each energy's `weight` is its ANNEALING TARGET (t=1) and its
+# `weight_start` the BASE measure the base chain samples (t=0); the base chain must be
+# able to mix under the base. A start of 0 recovers the spanning-forest base. The older
+# gamma/iso_weight + gamma_start/iso_start form is read as the same thing (see
+# `energy_specs`), so existing configs are unaffected.
+haskey(params, "measure") || (params["measure"] = Dict{String, Any}())
+haskey(params["measure"], "measure_scores") ||
+    haskey(params["measure"], "energy") ||
+    (params["measure"]["measure_scores"] = ["get_log_spanning_forests",
+                                            "get_isoperimetric_score"])
+measure_specs  = energy_specs(params["measure"])
+measure_params = measure_parameters(params["measure"])
+# gamma is the weight in front of the log spanning-forest energy and iso_weight the
+# one in front of the Polsby-Popper score, wherever the config put them; these tag the
+# atlas name, so they are read off the measure rather than out of a config key.
+gamma       = energy_weight(measure_specs, "get_log_spanning_forests", measure_params)
+iso_weight  = energy_weight(measure_specs, "get_isoperimetric_score",  measure_params)
+gamma_start = energy_weight_start(measure_specs, "get_log_spanning_forests",
+                                  measure_params)
+iso_start   = energy_weight_start(measure_specs, "get_isoperimetric_score",
+                                  measure_params)
 
 # [ais]
 @unpack total_steps, base_steps_per_sample, steps_per_annealing = params["ais"]
@@ -93,27 +106,18 @@ proposal = [(two_cycle_walk_frac, cycle_walk),
 # ---------------------------------------------------------------------------
 # target measure + linear annealing schedule
 # ---------------------------------------------------------------------------
-target_weight = Dict{String, Float64}("get_log_spanning_forests" => gamma,
-                                      "get_isoperimetric_score"   => iso_weight)
-base_weight   = Dict{String, Float64}("get_log_spanning_forests" => gamma_start,
-                                      "get_isoperimetric_score"   => iso_start)
-measure = Measure()
-for s in measure_scores
-    haskey(target_weight, s) ||
-        error("unsupported measure score for AIS: \"$s\" (expected one of $(keys(target_weight)))")
-    # An energy annealed *down to* zero has a zero target weight; without allow_zero
-    # it would never enter measure.scores, and modify_measure! below would then write
-    # its ramped weight into a measure that ignores it.
-    push_energy!(measure, getfield(CycleWalk, Symbol(s)), target_weight[s];
-                 allow_zero = base_weight[s] != 0)
-end
+# The target measure, plus the (base, target) weight of every energy in it. `ramp` is
+# keyed by the energy function itself, which is what the schedule below writes to —
+# and the only way to reach a built energy, which has no name to look up.
+measure, ramp = build_annealed_measure(measure_specs, measure_params;
+                                       context=(graph=graph, num_dists=num_dists,
+                                                pop_col=pop_col))
 
 # ramp every energy weight linearly from its base value (step 0) to its target
 function modify_measure!(m::Measure, step::Int, total::Int)
     frac = step / total
-    for s in measure_scores
-        fnct = getfield(CycleWalk, Symbol(s))
-        m.weights[fnct] = base_weight[s] + (target_weight[s] - base_weight[s]) * frac
+    for (energy, (base, target)) in ramp
+        m.weights[energy] = base + (target - base) * frac
     end
 end
 

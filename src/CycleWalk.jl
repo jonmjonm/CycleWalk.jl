@@ -146,6 +146,14 @@ export AbstractGraph,
     Measure,
     push_energy!,
     evaluate_weight_expression,
+    EnergySpec,
+    energy_specs,
+    measure_parameters,
+    annealing_weights,
+    energy_weight,
+    energy_weight_start,
+    build_annealed_measure,
+    build_measure,
     get_log_energy,
     get_log_spanning_trees,
     get_log_spanning_forests,
@@ -223,6 +231,7 @@ include("./measure/constraints/balance.jl")
 
 include("./measure/measure.jl")
 include("./measure/weight_expressions.jl")
+include("./measure/measure_spec.jl")
 include("./measure/energy/defaults.jl")
 include("./measure/energy/log_forest_count.jl")
 include("./measure/energy/polsby_popper.jl")

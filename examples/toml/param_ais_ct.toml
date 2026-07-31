@@ -15,11 +15,21 @@ map_file="CT_pct20.json"
 # every weight up from the spanning-forest measure; set them to anneal between two
 # nonzero parameter sets (the base chain must be able to mix under the base measure).
 [measure]
-measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
-gamma=1.0
-iso_weight=0.3
-# gamma_start=0.0
-# iso_start=0.0
+# Annealing endpoints: each energy's `weight` is its TARGET (t=1) and its
+# `weight_start` the BASE the base chain samples at t=0 (default 0, which recovers the
+# spanning-forest base). The base chain must be able to mix under the base.
+gamma = 1.0
+iso_weight = 0.3
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+# weight_start = 0.0
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+# weight_start = 0.0
 
 [ais]
 total_steps=1.0e4            # total base-chain steps
