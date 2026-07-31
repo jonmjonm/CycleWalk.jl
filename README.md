@@ -96,7 +96,7 @@ The most update directions can be found at [duke.is/cyclewalk](https://duke.is/C
 
 ## Example Scripts from the Git Repo
 
-The `examples` directory contains example scripts that demonstrate how to use the Metropolized Cycle Walk algorithm. These scripts can be run to generate redistricting plans and analyze their properties.
+The `examples` directory contains example scripts that demonstrate how to use the Metropolized Cycle Walk algorithm. These scripts can be run to generate redistricting plans and analyze their properties. [`examples/README.md`](./examples/README.md) describes what is there — the scripts, the sample graphs, and the ready-to-run configurations in `examples/toml`.
 
 ### Basic Usage
 
@@ -120,13 +120,18 @@ One must be in the `examples` directory to run both of these commands.
 
 #### The configuration file
 
-The `[measure]` table describes the target. Each `[[measure.energy]]` block adds one
-energy, exactly as a `push_energy!` call would:
+A configuration has four tables: `[plans]` (the graph, its columns, the number of
+districts and the population tolerance), `[mcmc]` (how many steps, and the proposal
+mixture), `[measure]` (the target distribution) and `[run]` (output, seeding,
+diagnostics).
+
+The target is written as one `[[measure.energy]]` block per energy, each weighted by a
+number or by arithmetic over the named parameters in `[measure]`:
 
 ```toml
 [measure]
 gamma = 1.0
-vra_weight = 2.0
+iso_weight = 0.3
 
 [[measure.energy]]
 name   = "get_log_spanning_forests"
@@ -135,74 +140,23 @@ weight = "gamma"
 [[measure.energy]]
 name   = "get_log_district_trees"
 weight = "2*gamma + 1"                 # moves with gamma
-
-[[measure.energy]]
-name   = "build_get_partisan_margins"  # a builder, called with its arguments
-args   = ["PRES16_D", "PRES16_R"]
-weight = "vra_weight"
-desc   = "partisan margins (PRES16)"   # a built energy is a closure; label it
 ```
 
-| Key | Meaning |
-| --- | --- |
-| `name` | An energy exported by `CycleWalk`, or a builder returning one. |
-| `weight` | A number, or arithmetic over the numbers in `[measure]`. |
-| `weight_start` | The weight an annealed run (AIS/SMC) starts from; absent means it does not anneal. |
-| `args` / `kwargs` | Arguments for a builder. |
-| `context` | Values the runner supplies rather than the file (`"graph"`, `"num_dists"`, `"pop_col"`), passed before `args`. |
-| `desc` | The label recorded in the Atlas header. |
-
-Every number in `[measure]` is a named parameter a weight may be written in terms of.
-Expressions may use `+ - * / ^`, numbers and parameter names, and nothing else — they
-are interpreted rather than evaluated as Julia, so a config file cannot run code. That
-matters because config files are read back out of Atlas headers written elsewhere.
-
-`gamma` and `iso_weight` are not arbitrary names: they are the weights in front of
-`get_log_spanning_forests` and `get_isoperimetric_score`, and the output file is named
-with them, so they are read back off the measure that was built rather than from the
-keys.
-
-#### Overriding on the command line
+Any key can be overridden per run, with a named flag or with the repeatable
+`--set <table>.<key>=<value>`:
 
 ```bash
 julia run_cyclewalk_toml.jl toml/param_ct.toml --thread_id 7 --gamma 0.5
 julia run_cyclewalk_toml.jl toml/param_ct.toml --set measure.vra_weight=2.0
 ```
 
-`--set <table>.<key>=<value>` is repeatable and reaches any key, so a new config key
-never needs a change to the runner to be swept. Values are read as TOML and get the
-types they would have had in the file. Setting the same value with both a flag and
-`--set` is an error, and the table must already exist, so a mistyped table is caught.
-The overrides are recorded in the Atlas header, which the embedded config file alone
-would not show.
+The output file name carries every parameter the measure reads, so the points of a sweep
+never collide, and a run that would overwrite an existing Atlas stops unless you pass
+`--overwrite`.
 
-The output name carries `gamma`, `iso_weight`, and every other parameter a weight
-expression reads, so the points of a sweep land in separate files. As a backstop, a run
-that would overwrite an existing Atlas stops; pass `--overwrite` to replace it, or set
-`io_mode = "a"` in `[run]` to append.
-
-#### The earlier measure format (deprecated)
-
-Configs written before `[[measure.energy]]` listed the scores by name:
-
-```toml
-[measure]
-measure_scores = ["get_log_spanning_forests", "get_isoperimetric_score"]
-gamma = 1.0
-iso_weight = 0.3
-
-[measure.weights]                        # for scores gamma/iso_weight do not cover
-get_log_district_trees = "2*gamma + 1"
-```
-
-**This still works and existing files need not change** — every Atlas embeds its config,
-and `run_cyclewalk_extend.jl` reads those back to resume a chain, so this form has to
-keep running indefinitely. It is translated into the equivalent list of energies rather
-than handled separately.
-
-It is deprecated for new configs because it cannot express a weight for a third energy
-without a second table, an energy built from arguments, a label for one, or an annealing
-start. A file may use one form or the other, not both.
+**[`docs/run_cyclewalk_toml.md`](./docs/run_cyclewalk_toml.md) documents every key, the
+energies and observables a configuration may name, how the output name is built, all the
+command-line overrides, and the earlier (still supported) `measure_scores` form.**
 
 #### Extending an ensemble
 
