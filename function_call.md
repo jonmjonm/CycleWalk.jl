@@ -659,6 +659,19 @@ close_writer(writer::Writer)
 
 Flush and close the Atlas file. Call once after the run finishes.
 
+### `write_header!`
+
+```julia
+write_header!(writer::Writer)
+```
+
+Write the Atlas header — the file's first three lines — to disk, exactly once. This is
+deferred from the `Writer` constructor so a `run_*!` sampler can merge its run metadata
+into `atlasParam` first, and the samplers, `output` and `close_writer` all call it, so
+an ordinary run never needs to. Call it by hand only to force the header out early:
+`examples/run_cyclewalk_extend.jl` does so in its rewrite mode, to get the parent
+Atlas' maps copied in behind a freshly written header. Idempotent.
+
 ### `collect_included_sources`
 
 ```julia
