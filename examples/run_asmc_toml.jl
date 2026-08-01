@@ -4,13 +4,17 @@
 #   julia -t 48 run_asmc_toml.jl toml/param_annealed_smc_nc.toml --particles 2048 --rejuv 3000 \
 #                               --collect-steps 8000 --collect-every 500
 #
-# A population of `particles` is annealed from the base measure ([measure]
-# gamma_start/iso_start, default 0 = all weights 0) to the [measure] target along
-# `blocks` t-steps, resampling when ESS drops and rejuvenating
-# `rejuv` MH steps per block. With collect_steps>0, after t=1 the sampler keeps sampling
-# the target and emits each particle every collect_every steps (option-1 amplification:
-# particles * collect_steps/collect_every samples). See run_asmc.jl for the CLI-only
-# variant and run_ais_toml.jl for the AIS TOML runner this mirrors.
+# A population of `particles` is annealed from the base measure to the [measure]
+# target along `blocks` t-steps, resampling when ESS drops and rejuvenating `rejuv`
+# MH steps per block. smc.temper picks how each energy gets there: "linear"
+# (default) ramps every energy from its gamma_start/iso_start (default 0) straight
+# to its target; "path" follows each energy's own [[measure.energy]] weight_path
+# expression in t instead (see docs/run_pt_toml.md, which documents the shared
+# weight_path mechanism — not PT-specific despite the doc's name). With
+# collect_steps>0, after t=1 the sampler keeps sampling the target and emits each
+# particle every collect_every steps (option-1 amplification: particles *
+# collect_steps/collect_every samples). See run_asmc.jl for the CLI-only variant
+# and run_ais_toml.jl for the AIS TOML runner this mirrors.
 
 import Pkg
 Pkg.activate(normpath(joinpath(@__DIR__)))
@@ -33,6 +37,7 @@ overwrite_output = take_flag!(ARGS, "--overwrite")
 
 args = @dictarguments begin
     @argumentoptional String  schedule      "--schedule"
+    @argumentoptional String  temper        "--temper"
     @argumentoptional Int      particles     "--particles"
     @argumentoptional Int      blocks        "--blocks"
     @argumentoptional Int      rejuv         "--rejuv"
@@ -57,6 +62,7 @@ function cli!(section, key, v)
     v !== nothing && (params[section][key] = v)
 end
 cli!("smc", "schedule",      args[:schedule])
+cli!("smc", "temper",        args[:temper])
 cli!("smc", "particles",     args[:particles])
 cli!("smc", "blocks",        args[:blocks])
 cli!("smc", "rejuv",         args[:rejuv])
@@ -103,6 +109,9 @@ iso_start   = energy_weight_start(measure_specs, "get_isoperimetric_score",
 
 s = params["smc"]
 schedule_kind = get(s, "schedule", "fixed")
+temper_kind   = get(s, "temper", "linear")
+temper_kind in ("linear", "path") ||
+    error("smc.temper must be \"linear\" or \"path\", got \"$temper_kind\"")
 particles     = Int(get(s, "particles", 512))
 blocks        = Int(get(s, "blocks", 100))
 rejuv         = Int(get(s, "rejuv", 300))
@@ -141,30 +150,41 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(two_cycle_walk_frac, cycle_walk), (1.0 - two_cycle_walk_frac, internal_walk)]
 
 # ---------------------------------------------------------------------------
-# target measure + base measure. The linear path ramps each term from its base
-# weight (gamma_start/iso_start, default 0) at t=0 to its target at t=1. A term is
-# annealed if either endpoint is nonzero.
+# target measure + tempering path
 # ---------------------------------------------------------------------------
-# The target measure, plus the (base, target) weight of every energy in it. An energy
-# that is zero the whole way is dropped by push_energy!; one annealed *down to* zero is
-# kept (allow_zero), since the path cannot ramp an energy the measure does not have.
-measure, ramp = build_annealed_measure(measure_specs, measure_params;
-                                       context=(graph=graph, num_dists=num_dists,
-                                                pop_col=pop_col))
-
-# Linear path from base weights (t=0) to target weights (t=1), aligned to the exact
-# `scores` order the driver freezes. All-zero base recovers the default linear_path.
-# `ramp` is keyed by the energy function, which is what `scores` holds — no lookup
-# back through a name, which a built energy would not have.
-scores, target_w = annealed_smc_scores_and_targets(measure)
-K = length(scores)
-base_w  = ntuple(k -> ramp[scores[k]][1], K)
-path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]), K))
+# smc.temper = "linear" (default): the path ramps each term from its base weight
+# (gamma_start/iso_start, default 0) at t=0 to its target at t=1 — a term is
+# annealed if either endpoint is nonzero. An energy that is zero the whole way is
+# dropped by push_energy!; one annealed *down to* zero is kept (allow_zero), since
+# the path cannot ramp an energy the measure does not have.
+#
+# smc.temper = "path": each energy follows its own [[measure.energy]] weight_path
+# expression in t (arbitrary arithmetic, not required to be linear or to start at
+# 0/end at the target — see docs/run_pt_toml.md, which documents this the same way
+# for parallel tempering); an energy with no weight_path holds constant at its
+# weight. Built by build_path_measure — see docs/run_pt_toml.md for the shared
+# weight_path mechanism (core, not PT-specific).
+context = (graph=graph, num_dists=num_dists, pop_col=pop_col)
+if temper_kind == "linear"
+    measure, ramp = build_annealed_measure(measure_specs, measure_params; context=context)
+    # Linear path from base weights (t=0) to target weights (t=1), aligned to the
+    # exact `scores` order the driver freezes. All-zero base recovers the default
+    # linear_path. `ramp` is keyed by the energy function, which is what `scores`
+    # holds — no lookup back through a name, which a built energy would not have.
+    scores, target_w = annealed_smc_scores_and_targets(measure)
+    K = length(scores)
+    base_w = ntuple(k -> ramp[scores[k]][1], K)
+    path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]), K))
+else # "path"
+    measure, path = build_path_measure(measure_specs, measure_params; context=context)
+    scores, _ = annealed_smc_scores_and_targets(measure)
+end
 
 # ---------------------------------------------------------------------------
 # writer: run-tagged atlas name (graph / size / threads) so runs never overwrite
 # ---------------------------------------------------------------------------
 tag = @sprintf("_smc_p%d_b%d_r%d_t%d", particles, blocks, rejuv, nthreads)
+temper_kind == "path" && (tag *= "_path")   # "linear" is the default; unflagged
 collect_steps > 0 && (tag *= @sprintf("_c%de%d", collect_steps, collect_every))
 # The measure's weights belong in the name too — two runs of the same size differing
 # only in gamma used to compute one path. `string` rather than %g: %g rounds to six
@@ -193,8 +213,9 @@ schedule = schedule_kind == "adaptive" ?
     FixedSchedule(range(0, 1; length=blocks + 1); ess_frac=ess_frac)
 
 n_maps = particles * (collect_steps > 0 ? div(collect_steps, max(collect_every, 1)) : 1)
-println("SMC $(atlasNameBase)/$(schedule_kind): N=$particles blocks=$blocks rejuv=$rejuv ",
-        "init=$init_steps collect=$collect_steps/$collect_every threads=$nthreads")
+println("SMC $(atlasNameBase)/$(schedule_kind)/temper=$(temper_kind): N=$particles ",
+        "blocks=$blocks rejuv=$rejuv init=$init_steps ",
+        "collect=$collect_steps/$collect_every threads=$nthreads")
 println("  base γ=$gamma_start iso=$iso_start  ->  target γ=$gamma iso=$iso_weight")
 println("  -> $output_file_path  (~$n_maps maps)")
 

@@ -1,10 +1,11 @@
 """
-    track_weight_and_modify_measure!(cur_step, partition, total_steps, weight,
-                                     measure, modify_measure!)
+    track_weight_and_configure_measure!(cur_step, partition, total_steps, weight,
+                                        measure, path, scores)
 
 Pre-step hook for annealed importance sampling. Advance `measure` one annealing
-step via `modify_measure!(measure, cur_step, total_steps)` and accumulate the log
-importance weight in place.
+step via `configure_measure!(path, measure, scores, cur_step/total_steps)` — the
+same `AnnealPath` seam annealed SMC and parallel tempering use (see
+`anneal_path.jl`) — and accumulate the log importance weight in place.
 
 The increment is `log[ν_new(τ)/ν_old(τ)]`, the log-density ratio of the current
 `partition` under the measure after vs. before the modification. `get_log_energy`
@@ -16,30 +17,31 @@ energy. Getting this backwards makes AIS estimate `Z_base/Z_target` instead of
 `Z_target/Z_base`; `test_annealed_importance_sampling.jl` pins it against the exactly
 known `log Z(1)/Z(0) = log(117/654)` on the 4×4 test graph.
 """
-function track_weight_and_modify_measure!(
+function track_weight_and_configure_measure!(
     cur_step::Int,
     partition::LinkCutPartition,
     total_steps::Int,
     weight::MutableFloat,
     measure::Measure,
-    modify_measure!::Function
-)
+    path::AnnealPath,
+    scores::NTuple{K,Function}
+) where {K}
     e1 = get_log_energy(partition, measure)
-    modify_measure!(measure, cur_step, total_steps)
+    configure_measure!(path, measure, scores, cur_step / total_steps)
     e2 = get_log_energy(partition, measure)
     weight.value += e1 - e2      # log[ν_new/ν_old]; ν ∝ exp(−energy), so NOT e2 - e1
 end
 
 """
     track_weight_record_path!(cur_step, partition, total_steps, weight, measure,
-                              modify_measure!, recorders, stride, buffers)
+                              path, scores, recorders, stride, buffers)
 
 Annealing prestep hook used when path recording is enabled. Does everything
-[`track_weight_and_modify_measure!`](@ref) does, and additionally, every `stride` steps
-(and on the final step), appends each [`PathRecorder`](@ref)'s value to its buffer in
-`buffers`: the built-ins read the running `weight`, this step's `delta`, or the schedule
-fraction, and an `:observable` recorder evaluates its `f(partition)` on the current
-annealing partition.
+[`track_weight_and_configure_measure!`](@ref) does, and additionally, every `stride`
+steps (and on the final step), appends each [`PathRecorder`](@ref)'s value to its
+buffer in `buffers`: the built-ins read the running `weight`, this step's `delta`, or
+the schedule fraction, and an `:observable` recorder evaluates its `f(partition)` on
+the current annealing partition.
 """
 function track_weight_record_path!(
     cur_step::Int,
@@ -47,15 +49,16 @@ function track_weight_record_path!(
     total_steps::Int,
     weight::MutableFloat,
     measure::Measure,
-    modify_measure!::Function,
+    path::AnnealPath,
+    scores::NTuple{K,Function},
     recorders::Vector{PathRecorder},
     stride::Int,
     buffers::Dict{String, Vector{Any}}
-)
+) where {K}
     e1 = get_log_energy(partition, measure)
-    modify_measure!(measure, cur_step, total_steps)
+    configure_measure!(path, measure, scores, cur_step / total_steps)
     e2 = get_log_energy(partition, measure)
-    delta = e1 - e2              # see track_weight_and_modify_measure! on the sign
+    delta = e1 - e2              # see track_weight_and_configure_measure! on the sign
     weight.value += delta
     if cur_step % stride == 0 || cur_step == total_steps
         for r in recorders
@@ -69,7 +72,7 @@ function track_weight_record_path!(
 end
 
 """
-    anneal_sample!(partition, proposal, base_measure, modify_measure!,
+    anneal_sample!(partition, proposal, base_measure, path, scores,
                    steps_per_annealing, seed, run_diagnostics)
 
 Anneal one base-chain sample toward the target measure and return
@@ -84,13 +87,14 @@ function anneal_sample!(
     partition::LinkCutPartition,
     proposal::Union{Function,Vector{Tuple{T, Function}}},
     base_measure::Measure,
-    modify_measure!::Function,
+    path::AnnealPath,
+    scores::NTuple{K,Function},
     steps_per_annealing::Int,
     seed::UInt64,
     run_diagnostics::RunDiagnostics;
     path_recorders::Vector{PathRecorder}=PathRecorder[],
     path_target_points::Int=50
-) where T <: Real
+) where {T <: Real, K}
     log_weight = MutableFloat(0.0)
     annealing_measure = deepcopy(base_measure)
     annealing_rng = PCG.PCGStateOneseq(UInt64, seed)
@@ -99,10 +103,10 @@ function anneal_sample!(
                                  steps_per_annealing, annealing_rng;
                                  output_initial=false,
                                  run_diagnostics=run_diagnostics,
-                                 prestepf=track_weight_and_modify_measure!,
+                                 prestepf=track_weight_and_configure_measure!,
                                  prestepargs=(partition, steps_per_annealing,
                                               log_weight, annealing_measure,
-                                              modify_measure!))
+                                              path, scores))
         return log_weight.value, nothing
     end
     stride = max(1, div(steps_per_annealing, max(path_target_points, 1)))
@@ -114,31 +118,33 @@ function anneal_sample!(
                              prestepf=track_weight_record_path!,
                              prestepargs=(partition, steps_per_annealing,
                                           log_weight, annealing_measure,
-                                          modify_measure!, path_recorders,
+                                          path, scores, path_recorders,
                                           stride, buffers))
     return log_weight.value, buffers
 end
 
 """
-    run_annealed_importance_sampling!(partition, proposal, measure, modify_measure!,
+    run_annealed_importance_sampling!(partition, proposal, measure,
                                       total_steps, base_steps_per_sample,
                                       steps_per_annealing, rng;
-                                      writer=nothing,
+                                      path=nothing, writer=nothing,
                                       run_diagnostics=RunDiagnostics(),
                                       ntasks=1)
 
 Run annealed importance sampling (AIS) and return the vector of log importance
 weights, one per annealing run.
 
-`modify_measure!(measure, cur_step, total_steps)` defines the annealing schedule:
-called with `(0, 1)` it must set `measure` to the base measure, and stepping
-`cur_step` from 1 to `total_steps` it must interpolate toward the target measure.
-The base chain runs on `partition` under the base measure for
-`base_steps_per_sample` Metropolis–Hastings steps between samples; each sample is
-then deep-copied and annealed toward the target for `steps_per_annealing` steps
-while [`track_weight_and_modify_measure!`](@ref) accumulates its log weight. The
-base chain takes `total_steps` steps in all, so `total_steps ÷
-base_steps_per_sample` annealing runs are performed.
+`path` (default: `linear_path` from `measure`'s target weights — the same
+convention [`run_annealed_smc!`](@ref) uses) is the [`AnnealPath`](@ref) the
+annealing schedule follows: `configure_measure!(path, measure, scores, 0.0)` must
+give the base measure, and `configure_measure!(path, measure, scores, 1.0)` the
+target. A bare `t ↦ NTuple` function is wrapped as a `LinearPath` automatically. The
+base chain runs on `partition` under the base measure for `base_steps_per_sample`
+Metropolis–Hastings steps between samples; each sample is then deep-copied and
+annealed toward the target for `steps_per_annealing` steps while
+[`track_weight_and_configure_measure!`](@ref) accumulates its log weight. The base
+chain takes `total_steps` steps in all, so `total_steps ÷ base_steps_per_sample`
+annealing runs are performed.
 
 Annealing runs execute on `ntasks` concurrent tasks (use `julia -t N` to give
 them threads). Each run gets an independent RNG seeded from a draw made
@@ -164,26 +170,29 @@ function run_annealed_importance_sampling!(
     partition::LinkCutPartition,
     proposal::Union{Function,Vector{Tuple{T, Function}}},
     measure::Measure,
-    modify_measure!::Function,
     total_steps::Int,
     base_steps_per_sample::Int,
     steps_per_annealing::Int,
     rng::AbstractRNG;
+    path::Union{AnnealPath,Function,Nothing}=nothing,
     writer::Union{Writer, Nothing}=nothing,
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
     ntasks::Int=1,
     seed=nothing,
-    schedule::String="linear"
 )::Vector{Float64} where T <: Real
     @assert ntasks >= 1
+
+    scores, target_w = measure_scores_and_targets(measure)
+    K = length(scores)
+    path === nothing && (path = linear_path(target_w))
+    path isa Function && (path = LinearPath{K}(path))   # bare t↦NTuple ⇒ linear
 
     # Stamp this run's metadata onto the atlas header before any sample is written.
     if writer !== nothing
         stamp_run_metadata!(writer,
             annealed_importance_sampling_run_metadata(
-                measure, modify_measure!, total_steps, base_steps_per_sample,
-                steps_per_annealing; seed=seed, proposal=proposal, ntasks=ntasks,
-                schedule=schedule))
+                measure, total_steps, base_steps_per_sample, steps_per_annealing;
+                seed=seed, path=path, proposal=proposal, ntasks=ntasks))
     end
 
     # The spanning-forest energy takes a log-determinant per district, which calls
@@ -198,7 +207,7 @@ function run_annealed_importance_sampling!(
     try
 
     base_measure = deepcopy(measure)
-    modify_measure!(base_measure, 0, 1)
+    configure_measure!(path, base_measure, scores, 0.0)
 
     # per-sample annealing-path recording, configured on the writer (empty => off)
     path_recorders = writer === nothing ? PathRecorder[] : writer.path_recorders
@@ -230,7 +239,7 @@ function run_annealed_importance_sampling!(
         for (idx, sample, seed, diagnostics) in work_channel
             log_weight, path_buffers =
                 anneal_sample!(sample, proposal, base_measure,
-                               modify_measure!, steps_per_annealing,
+                               path, scores, steps_per_annealing,
                                seed, diagnostics;
                                path_recorders=path_recorders,
                                path_target_points=path_target_points)

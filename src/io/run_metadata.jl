@@ -84,76 +84,47 @@ function metropolis_hastings_run_metadata(
 end
 
 """
-    annealed_importance_sampling_run_metadata(measure, modify_measure!, total_steps,
+    annealed_importance_sampling_run_metadata(measure, total_steps,
         base_steps_per_sample, steps_per_annealing;
-        seed=nothing, proposal=nothing, ntasks=1, schedule="linear", extra=Dict())
+        seed=nothing, path=nothing, proposal=nothing, ntasks=1, extra=Dict())
 
 Build the run-metadata dict for an annealed-importance-sampling CycleWalk run
 ([`run_annealed_importance_sampling!`](@ref)). `run_annealed_importance_sampling!`
-stamps this automatically. The base and target annealing weights are recorded by
-evaluating `modify_measure!(copy, 0, 1)` (base) against the target `measure`, both
-labelled by score.
+stamps this automatically. The annealing-path endpoints (`weights_at(path, 0)` and
+`weights_at(path, 1)`, labelled by score) are recorded directly — `path` mirrors the
+driver's own default (`linear_path` from the target weights when `nothing`).
 
-`schedule` is a caller-supplied *label* — `modify_measure!` is an opaque closure, so
-nothing can check that the label describes it. To keep the header from resting on an
-unverifiable claim, the schedule is also **sampled**: `modify_measure!` is evaluated on
-a scratch measure at t ∈ {0, ¼, ½, ¾, 1} and the resulting per-score weights are
-recorded under `"weights.schedule"`, together with `"schedule.is_linear"` saying
-whether those points do in fact interpolate linearly from base to target. A reader can
-therefore see what the run actually did rather than what it was called.
-
-(`run_annealed_smc!`'s `AnnealPath` needs none of this — it is introspectable by
-construction, which is the better design and the one AIS should eventually adopt.)
+Unlike AIS's old `modify_measure!` closure, an `AnnealPath` is introspectable by
+construction (the same seam `run_annealed_smc!` and `run_parallel_tempering!` use),
+so there is no opaque schedule to sample defensively or a label that could disagree
+with what the run actually did.
 """
 function annealed_importance_sampling_run_metadata(
     measure::Measure,
-    modify_measure!::Function,
     total_steps::Integer,
     base_steps_per_sample::Integer,
     steps_per_annealing::Integer;
     seed=nothing,
+    path::Union{AnnealPath, Function, Nothing}=nothing,
     proposal::Union{Function, Vector, Nothing}=nothing,
     ntasks::Int=1,
-    schedule::String="linear",
     extra::AbstractDict=Dict{String, Any}(),
 )
-    base = deepcopy(measure)
-    modify_measure!(base, 0, 1)
-
-    # Sample the schedule rather than trusting its label: evaluate modify_measure! on a
-    # scratch measure at a few points and record the weights it actually produces. The
-    # denominator is chosen so integer (cur_step, total_steps) arithmetic lands exactly
-    # on the quarter points.
-    sampled = Dict{String, Any}()
-    scratch = deepcopy(measure)
-    for step in 0:4
-        modify_measure!(scratch, step, 4)
-        sampled[string(step / 4)] = _weights_dict(scratch)
-    end
-    # Does it interpolate linearly from base to target? Compared per score, so a
-    # schedule that ramps one term nonlinearly is reported as nonlinear.
-    is_linear = all(0:4) do step
-        frac = step / 4
-        all(measure.scores) do e
-            expected = (1 - frac) * base.weights[e] + frac * measure.weights[e]
-            isapprox(sampled[string(frac)][_score_label(measure, e)], expected;
-                     atol = 1e-9, rtol = 1e-6)
-        end
-    end
+    scores, target_w = measure_scores_and_targets(measure)
+    K = length(scores)
+    p = path === nothing ? linear_path(target_w) :
+        path isa Function ? LinearPath{K}(path) : path
 
     params = Dict{String, Any}(
         "function"              => "run_annealed_importance_sampling!",
-        "schedule"              => schedule,
-        "schedule.is_linear"    => is_linear,
-        "weights.schedule"      => sampled,
         "total_steps"           => total_steps,
         "base_steps_per_sample" => base_steps_per_sample,
         "steps_per_annealing"   => steps_per_annealing,
         "n_samples"             => div(total_steps, base_steps_per_sample),
         "ntasks"                => ntasks,
         "threads"               => Threads.nthreads(),
-        "weights.base"          => _weights_dict(base),
-        "weights.target"        => _weights_dict(measure),
+        "weights.base"          => _label_weights(scores, weights_at(p, 0.0), measure),
+        "weights.target"        => _label_weights(scores, weights_at(p, 1.0), measure),
     )
     _maybe_seed!(params, seed)
     proposal !== nothing && (params["proposal"] = describe_proposal(proposal))

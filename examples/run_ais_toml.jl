@@ -2,11 +2,14 @@
 #
 #   julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
 #
-# A base chain samples the base measure ([measure] gamma_start/iso_start, default 0 =
-# spanning-forest) and each retained sample is annealed toward the target measure (the
-# [measure] gamma/iso_weight) while its log importance weight is accumulated. Annealing
-# runs execute on `ntasks`
-# concurrent tasks — start Julia with threads (-t). See run_ais_ct.jl for the same run
+# A base chain samples the base measure and each retained sample is annealed toward
+# the [measure] target while its log importance weight is accumulated. ais.temper
+# picks how each energy gets there: "linear" (default) ramps every energy from its
+# gamma_start/iso_start (default 0) straight to its target; "path" follows each
+# energy's own [[measure.energy]] weight_path expression in t instead (see
+# docs/run_pt_toml.md, which documents the shared weight_path mechanism — not
+# PT-specific despite the doc's name). Annealing runs execute on `ntasks` concurrent
+# tasks — start Julia with threads (-t). See run_ais_ct.jl for the same run
 # expressed directly in Julia, and run_cyclewalk_toml.jl for the serial TOML runner.
 
 import Pkg
@@ -60,8 +63,9 @@ iso_start   = energy_weight_start(measure_specs, "get_isoperimetric_score",
 
 # [ais]
 @unpack total_steps, base_steps_per_sample, steps_per_annealing = params["ais"]
-schedule = get(params["ais"], "schedule", "linear")
-schedule == "linear" || error("only schedule=\"linear\" is supported (got \"$schedule\")")
+temper_kind = get(params["ais"], "temper", "linear")
+temper_kind in ("linear", "path") ||
+    error("ais.temper must be \"linear\" or \"path\", got \"$temper_kind\"")
 total_steps           = Int(total_steps)
 base_steps_per_sample = Int(base_steps_per_sample)
 steps_per_annealing   = Int(steps_per_annealing)
@@ -108,21 +112,17 @@ proposal = [(two_cycle_walk_frac, cycle_walk),
             (1.0 - two_cycle_walk_frac, internal_walk)]
 
 # ---------------------------------------------------------------------------
-# target measure + linear annealing schedule
+# target measure + tempering path
 # ---------------------------------------------------------------------------
-# The target measure, plus the (base, target) weight of every energy in it. `ramp` is
-# keyed by the energy function itself, which is what the schedule below writes to —
-# and the only way to reach a built energy, which has no name to look up.
-measure, ramp = build_annealed_measure(measure_specs, measure_params;
-                                       context=(graph=graph, num_dists=num_dists,
-                                                pop_col=pop_col))
-
-# ramp every energy weight linearly from its base value (step 0) to its target
-function modify_measure!(m::Measure, step::Int, total::Int)
-    frac = step / total
-    for (energy, (base, target)) in ramp
-        m.weights[energy] = base + (target - base) * frac
-    end
+context = (graph=graph, num_dists=num_dists, pop_col=pop_col)
+if temper_kind == "linear"
+    measure, ramp = build_annealed_measure(measure_specs, measure_params; context=context)
+    scores, target_w = annealed_smc_scores_and_targets(measure)
+    K = length(scores)
+    base_w = ntuple(k -> ramp[scores[k]][1], K)
+    path = LinearPath{K}(t -> ntuple(k -> base_w[k] + t * (target_w[k] - base_w[k]), K))
+else # "path"
+    measure, path = build_path_measure(measure_specs, measure_params; context=context)
 end
 
 # ---------------------------------------------------------------------------
@@ -130,6 +130,7 @@ end
 # ---------------------------------------------------------------------------
 atlasName  = atlasNameBase * "_thread" * string(thread_id)
 atlasName *= "_ais_2cf" * string(two_cycle_walk_frac)
+temper_kind == "path" && (atlasName *= "_path")   # "linear" is the default; unflagged
 gamma       > 0 && (atlasName *= "_gamma" * string(gamma))
 iso_weight  > 0 && (atlasName *= "_iso" * string(iso_weight))
 gamma_start > 0 && (atlasName *= "_gammastart" * string(gamma_start))
@@ -155,12 +156,13 @@ end
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
-println("running AIS on ", ntasks, " task(s); outputting here: ", output_file_path)
+println("running AIS (temper=$temper_kind) on ", ntasks, " task(s); outputting here: ",
+        output_file_path)
 log_weights = run_annealed_importance_sampling!(
-    partition, proposal, measure, modify_measure!, total_steps,
+    partition, proposal, measure, total_steps,
     base_steps_per_sample, steps_per_annealing, rng;
-    writer=writer, ntasks=ntasks,
-    seed=rng_seed_base + 15123 * thread_id, schedule=schedule)
+    path=path, writer=writer, ntasks=ntasks,
+    seed=rng_seed_base + 15123 * thread_id)
 close_writer(writer)
 
 # summarize log importance weights (stable: subtract the max before exponentiating)
