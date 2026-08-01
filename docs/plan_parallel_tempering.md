@@ -1,7 +1,12 @@
-# Implementation plan: parallel tempering in CycleWalk.jl
+# Design decisions: parallel tempering in CycleWalk.jl
 
-Status: **plan only — nothing implemented yet.** Written to be picked up by a fresh
-session. Reference implementation being ported:
+> **Building it? Start with
+> [`parallel_tempering_implementation.md`](parallel_tempering_implementation.md)**, the
+> ordered task roadmap with code sketches, acceptance checks, and the full test plan.
+> *This* file is the design record: which options were considered, which were rejected,
+> and why. The roadmap cites it as "(design §x.y)" wherever a choice needs justifying.
+
+Status: **plan only — nothing implemented yet.** Reference implementation being ported:
 `/Users/jonm/Git/Greg/multiscalemapsampler-public/src/parallel_tempering.jl` (219 lines,
 Julia, `MultiScaleMapSampler`). A second, independent implementation with a good
 diagnostic set lives at `/Users/jonm/Git/Greg/NC_StateLeg/src/ParallelTempering.java`.
