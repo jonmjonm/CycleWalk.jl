@@ -509,8 +509,9 @@ julia --project=. run_cyclewalk_extend.jl output/grid/<atlas>.jsonl.gz \
 Adds samples to an existing Atlas, restarting from the last plan it recorded and reading
 the configuration back out of its header — so the extension derives its settings exactly
 as the original run did. `--burn_in` discards steps before recording resumes. An Atlas
-records a districting rather than a spanning forest, so the forest is redrawn on restart
-exactly as a fresh run's initial partition is.
+records a districting rather than a spanning forest, so on restart a random forest is
+drawn consistent with the last recorded partition — the districting itself carries over
+unchanged from the atlas; only the forest coordinate is refreshed.
 
 ## Error messages and what they mean
 

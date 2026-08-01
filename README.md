@@ -166,8 +166,9 @@ julia run_cyclewalk_extend.jl output/grid/<atlas>.jsonl.gz --add_cycle_walk_step
 
 Adds samples to an existing Atlas, restarting from the last plan it recorded and reading
 the config back out of its header. `--burn_in` discards steps before recording resumes.
-An Atlas records a districting rather than a spanning forest, so the forest is redrawn on
-restart exactly as a fresh run's initial partition is.
+An Atlas records a districting rather than a spanning forest, so on restart a random
+forest is drawn consistent with the last recorded partition — the districting itself
+carries over unchanged from the atlas; only the forest coordinate is refreshed.
 
 ### Annealed Importance Sampling (AIS)
 
