@@ -91,9 +91,19 @@ end
 Build the run-metadata dict for an annealed-importance-sampling CycleWalk run
 ([`run_annealed_importance_sampling!`](@ref)). `run_annealed_importance_sampling!`
 stamps this automatically. The base and target annealing weights are recorded by
-evaluating `modify_measure!(copy, 0, 1)` (base) against the target `measure` (both
-labelled by score); `schedule` names the interpolation shape (the closure body itself
-cannot be introspected).
+evaluating `modify_measure!(copy, 0, 1)` (base) against the target `measure`, both
+labelled by score.
+
+`schedule` is a caller-supplied *label* — `modify_measure!` is an opaque closure, so
+nothing can check that the label describes it. To keep the header from resting on an
+unverifiable claim, the schedule is also **sampled**: `modify_measure!` is evaluated on
+a scratch measure at t ∈ {0, ¼, ½, ¾, 1} and the resulting per-score weights are
+recorded under `"weights.schedule"`, together with `"schedule.is_linear"` saying
+whether those points do in fact interpolate linearly from base to target. A reader can
+therefore see what the run actually did rather than what it was called.
+
+(`run_annealed_smc!`'s `AnnealPath` needs none of this — it is introspectable by
+construction, which is the better design and the one AIS should eventually adopt.)
 """
 function annealed_importance_sampling_run_metadata(
     measure::Measure,
@@ -109,9 +119,33 @@ function annealed_importance_sampling_run_metadata(
 )
     base = deepcopy(measure)
     modify_measure!(base, 0, 1)
+
+    # Sample the schedule rather than trusting its label: evaluate modify_measure! on a
+    # scratch measure at a few points and record the weights it actually produces. The
+    # denominator is chosen so integer (cur_step, total_steps) arithmetic lands exactly
+    # on the quarter points.
+    sampled = Dict{String, Any}()
+    scratch = deepcopy(measure)
+    for step in 0:4
+        modify_measure!(scratch, step, 4)
+        sampled[string(step / 4)] = _weights_dict(scratch)
+    end
+    # Does it interpolate linearly from base to target? Compared per score, so a
+    # schedule that ramps one term nonlinearly is reported as nonlinear.
+    is_linear = all(0:4) do step
+        frac = step / 4
+        all(measure.scores) do e
+            expected = (1 - frac) * base.weights[e] + frac * measure.weights[e]
+            isapprox(sampled[string(frac)][_score_label(measure, e)], expected;
+                     atol = 1e-9, rtol = 1e-6)
+        end
+    end
+
     params = Dict{String, Any}(
         "function"              => "run_annealed_importance_sampling!",
         "schedule"              => schedule,
+        "schedule.is_linear"    => is_linear,
+        "weights.schedule"      => sampled,
         "total_steps"           => total_steps,
         "base_steps_per_sample" => base_steps_per_sample,
         "steps_per_annealing"   => steps_per_annealing,

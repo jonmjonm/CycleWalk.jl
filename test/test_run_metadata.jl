@@ -97,6 +97,42 @@
             @test params["seed"] == 999
             @test params["weights.base"]["get_log_spanning_forests"] == 0.0
             @test params["weights.target"]["get_log_spanning_forests"] == 0.7
+
+            # `schedule` is an unverifiable caller-supplied label, so the header also
+            # records what modify_measure! ACTUALLY produces at t = 0, 1/4, ..., 1.
+            sampled = params["weights.schedule"]
+            @test Set(keys(sampled)) == Set(["0.0", "0.25", "0.5", "0.75", "1.0"])
+            @test sampled["0.0"]["get_log_spanning_forests"] == 0.0
+            @test sampled["0.5"]["get_log_spanning_forests"] ≈ 0.35
+            @test sampled["1.0"]["get_log_spanning_forests"] ≈ 0.7
+            @test params["schedule.is_linear"] == true
+        end
+    end
+
+    @testset "AIS schedule sampling detects a nonlinear ramp" begin
+        # The label says "linear"; the schedule is quadratic. schedule.is_linear must
+        # contradict it, so a reader can see the run for what it was.
+        mktempdir() do dir
+            path = joinpath(dir, "ais_quad.jsonl.gz")
+            p = fresh_partition(12)
+            m = make_measure()
+            modify_measure! = (mm, step, total) -> begin
+                frac = (step / total)^2               # deliberately NOT linear
+                mm.weights[get_log_spanning_forests] = 0.7 * frac
+                mm.weights[get_isoperimetric_score]  = 0.3 * frac
+            end
+            w = Writer(m, constraints, p, path; weight_type=Float64)
+            run_annealed_importance_sampling!(p, proposal, m, modify_measure!,
+                                              40, 20, 30,
+                                              PCG.PCGStateOneseq(UInt64, 12);
+                                              writer=w, schedule="linear")
+            close_writer(w)
+
+            params = read_atlas_param(path)["chain.parameters"]
+            @test params["schedule"] == "linear"          # the label, as passed
+            @test params["schedule.is_linear"] == false   # the evidence, as measured
+            # quadratic: at t=1/2 the weight is 1/4 of target, not 1/2
+            @test params["weights.schedule"]["0.5"]["get_log_spanning_forests"] ≈ 0.7/4
         end
     end
 

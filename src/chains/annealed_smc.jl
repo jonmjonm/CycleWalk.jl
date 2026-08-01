@@ -1,5 +1,5 @@
 # =============================================================================
-# Annealed SMC sampler (Del Moral–Doucet–Jasra 2006) — SKELETON / DRAFT
+# Annealed SMC sampler (Del Moral–Doucet–Jasra 2006)
 #
 # Evolves a POPULATION of N particles together along a PATH through measure space
 # parametrised by t ∈ [0,1]. The path returns, at each t, the weight of every
@@ -34,8 +34,10 @@
 #     E(state, t) = ⟨ path(t), φ ⟩
 # so the adaptive ESS root-find is a pure arithmetic sweep — no energy calls.
 #
-# Status: skeleton. Debug the plumbing on `grid` with `FixedSchedule` before
-# dropping in the adaptive bisection. TODOs marked.
+# Schedules are STATEFUL and are reset by `run_annealed_smc!` on entry (see
+# [`reset_schedule!`](@ref)), so the same object may be reused across runs. Before that
+# reset existed, a second run with the same schedule silently performed zero blocks and
+# returned logZ = 0.0.
 # =============================================================================
 
 # ------------------------------------------------------------------ tuple utils
@@ -78,14 +80,33 @@ end
 """
     AdaptiveTempering(; ess_target=0.5)
 
-Chooses `t_next` online so the population ESS drops to `ess_target * N` (coupled
-form: resample every step). `next_t` is a STUB — drop the bisection in.
+Chooses `t_next` online by bisection so the population ESS drops to `ess_target * N`,
+in the coupled form (resample every step). `t_prev` tracks the last point returned and
+is maintained by [`next_t`](@ref); [`reset_schedule!`](@ref) returns it to 0.
+
+Requires `init_steps > 0`: with an unburned population every particle is an identical
+clone, so every incremental weight is equal, ESS ≡ N, and the bisection jumps straight
+to t = 1 on that false signal. `run_annealed_smc!` rejects the combination.
 """
 mutable struct AdaptiveTempering <: AnnealSchedule
     ess_target::Float64
     t_prev::Float64
     AdaptiveTempering(; ess_target=0.5) = new(ess_target, 0.0)
 end
+
+"""
+    reset_schedule!(schedule) -> schedule
+
+Return a stateful [`AnnealSchedule`](@ref) to its pre-run position so the same object
+can drive another run. `run_annealed_smc!` calls this on entry.
+
+Schedules carry a cursor — `FixedSchedule` its grid index `k`, `AdaptiveTempering` its
+`t_prev` — which is left at the end of the grid when a run finishes. Reusing one
+without resetting made [`done`](@ref) true immediately: the driver performed zero
+blocks and returned `logZ = 0.0` with an empty trace, no error, and no warning.
+"""
+reset_schedule!(s::FixedSchedule)     = (s.k = 0;       s)
+reset_schedule!(s::AdaptiveTempering) = (s.t_prev = 0.0; s)
 
 # --- next_t: THE ONLY BRANCH POINT --------------------------------------------
 
@@ -95,6 +116,10 @@ end
 Return the next schedule point in (t_prev, 1]. `particles` carry current `logW`
 and potentials `phi`; `path(t)` gives per-term weights, so an adaptive strategy
 scores candidate `t` with no energy calls.
+
+A schedule owns its own cursor: each method advances whatever state [`done`](@ref)
+reads, so the driver never reaches into the schedule and a new subtype needs no change
+there.
 """
 function next_t(sched::FixedSchedule, particles, path, t_prev)
     sched.k += 1
@@ -117,12 +142,16 @@ function next_t(sched::AdaptiveTempering, particles, path, t_prev)
         end
         return ess_from_logw(buf)
     end
-    trial_ess(1.0) >= target && return 1.0   # can reach the target in one jump
+    if trial_ess(1.0) >= target              # can reach the target in one jump
+        sched.t_prev = 1.0
+        return 1.0
+    end
     lo, hi = t_prev, 1.0
     for _ in 1:60                            # ~60 halvings ⇒ machine precision on t
         mid = 0.5 * (lo + hi)
         trial_ess(mid) >= target ? (lo = mid) : (hi = mid)
     end
+    sched.t_prev = lo                        # the schedule owns its own cursor
     return lo
 end
 
@@ -377,6 +406,16 @@ from `measure`'s target weights) is the swappable path geometry. Returns the fin
 (near-equally-weighted) particles, the log-normalizer estimate `logZ`, and a
 per-block trace `(t, ess, resampled)`.
 
+`schedule` is reset on entry ([`reset_schedule!`](@ref)), so one schedule object may
+drive several runs.
+
+`init_steps` burns each particle in independently under the base measure before
+annealing starts, which is what makes the population *diverse* at t=0 — without it all
+N particles are the same plan. It is **required** with `AdaptiveTempering` (an
+`ArgumentError` otherwise, since ESS ≡ N would send it straight to t=1) and strongly
+recommended with `FixedSchedule`, which otherwise marches its grid over a degenerate
+population.
+
 Post-anneal sample amplification ("option 1"): with `collect_steps > 0`, after the
 population reaches t=1 the sampler keeps applying MH moves at the TARGET measure
 (each particle is then a valid target-invariant chain) and, to `writer`, emits every
@@ -409,6 +448,22 @@ function run_annealed_smc!(
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
     seed=nothing,
 ) where {T<:Real}
+
+    # An unburned population is N identical clones, so every incremental weight is the
+    # same, ESS ≡ N, and AdaptiveTempering's bisection leaps to t=1 on that false
+    # signal — one block, no annealing, a meaningless logZ. FixedSchedule marches its
+    # grid regardless and only loses diversity, so it is merely inadvisable there.
+    if init_steps <= 0 && schedule isa AdaptiveTempering
+        throw(ArgumentError(
+            "run_annealed_smc! with AdaptiveTempering requires init_steps > 0: with " *
+            "init_steps=$init_steps every particle is an identical clone of " *
+            "`partition`, so the population ESS is always N and the schedule jumps " *
+            "straight to t=1. Burn the population in first (a few hundred to a few " *
+            "thousand steps), or use FixedSchedule."))
+    end
+    # Schedules carry a cursor and finish a run exhausted; reset so the same object can
+    # be reused (otherwise `done` is true immediately and the run is a silent no-op).
+    reset_schedule!(schedule)
 
     scores, target_w = annealed_smc_scores_and_targets(measure)
     K = length(scores)
@@ -465,7 +520,6 @@ function run_annealed_smc!(
     # ---- main SMC loop -------------------------------------------------------
     while !done(schedule)
         t = next_t(schedule, particles, path, t_prev)      # ← ONLY branch point
-        schedule isa AdaptiveTempering && (schedule.t_prev = t)
 
         incremental_logweight!(particles, path, t_prev, t) # pre-move weights
         ess = ess_from_logw([p.logW for p in particles])

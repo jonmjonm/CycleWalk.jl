@@ -34,7 +34,7 @@ schedule = "fixed"
 particles = 16
 blocks = 10
 rejuv = 20
-init_steps = 50
+init_steps = 50           # base-measure burn-in; must be > 0 when schedule = "adaptive"
 ess_frac = 0.5
 collect_steps = 100
 collect_every = 50

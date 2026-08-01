@@ -33,6 +33,11 @@ end
 Run `chain` on `partition` for `steps` (a count or an `(initial, final)` range) by
 delegating to [`run_metropolis_hastings!`](@ref). Wrapped in a `try`/`catch`:
 returns `(0, chain.measure)` on success and `(1, chain.measure)` if the run throws.
+
+The status-code return exists so a driver running many chains concurrently can note
+that one died and keep going rather than tearing down the others. The exception itself
+is logged with its backtrace before being converted to that code — swallowing it
+silently, as this did, turned any bug inside a chain into an unexplained `1`.
 """
 function run_chain!(
 	partition::MultiLevelPartition,
@@ -40,10 +45,11 @@ function run_chain!(
 	steps::Union{Int,Tuple{Int,Int}}
 )
 	try
-		run_metropolis_hastings!(partition, chain.proposal, chain.measure, steps, 
+		run_metropolis_hastings!(partition, chain.proposal, chain.measure, steps,
 			                     chain.rng, writer=chain.writer)
 		return 0, chain.measure
 	catch e
+		@error "run_chain! failed; returning status 1" exception=(e, catch_backtrace())
 		return 1, chain.measure
 	end
 end

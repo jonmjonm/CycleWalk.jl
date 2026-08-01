@@ -40,7 +40,10 @@ schedule = "fixed"        # "fixed" (t-grid + ESS<ess_frac*N resample) or "adapt
 particles = 1024          # population size N (= number of base samples; amplify via collect_*)
 blocks = 100              # fixed schedule: number of t-grid blocks (0->1)
 rejuv = 1500              # MH rejuvenation steps per block (mixing budget)
-init_steps = 3000         # base-measure burn-in for population diversity at t=0
+init_steps = 3000         # base-measure burn-in for population diversity at t=0.
+                          # REQUIRED (> 0) when schedule = "adaptive": without it every
+                          # particle is an identical clone, so ESS is always N and the
+                          # schedule jumps straight to t=1. Errors rather than doing it.
 ess_frac = 0.5            # fixed: resample when ESS < ess_frac * N
 ess_target = 0.5          # adaptive: target ESS fraction per tempering step
 # option-1 amplification: after t=1, keep sampling the TARGET and emit each particle

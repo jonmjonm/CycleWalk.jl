@@ -143,7 +143,19 @@ base_steps_per_sample` annealing runs are performed.
 Annealing runs execute on `ntasks` concurrent tasks (use `julia -t N` to give
 them threads). Each run gets an independent RNG seeded from a draw made
 sequentially on the base chain's `rng`, so the log weights are reproducible and
-identical for every `ntasks`. If a `writer` is supplied — construct it with
+identical for every `ntasks`.
+
+Note the scaling ceiling: the base chain is **serial** — it must produce sample `i`
+before sample `i` can be annealed — so by Amdahl the speedup is capped at
+
+    (base_steps_per_sample + steps_per_annealing) / base_steps_per_sample
+
+independent of how many threads are available. With `base_steps_per_sample=200` and
+`steps_per_annealing=800` that is 5×, and `ntasks` beyond 5 buys nothing. Raise
+`steps_per_annealing` (better annealing *and* more parallel headroom) or lower
+`base_steps_per_sample` (cheaper, but more correlated base samples) to lift it.
+
+If a `writer` is supplied — construct it with
 `weight_type=Float64` — sample `i` is written as map `"sample<i>"` with its log
 importance weight as the map's weight, and maps land on disk in sample order
 regardless of which task finishes first.

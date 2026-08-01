@@ -273,6 +273,96 @@ using Test
         @test minimum(rc.ess for rc in trace) > 2.0
     end
 
+    @testset "final particles are distributed as the target" begin
+        # The logZ test above pins the NORMALIZER; this pins the SAMPLES. At t=1 the
+        # weighted particle population must match the enumerated gamma=1 cut-edge
+        # distribution {8=>1, 10=>14, 11=>24, 12=>78}/117. Amplify with collect_steps
+        # so the histogram has enough draws to be worth comparing.
+        p88_constraints = initialize_constraints()
+        add_constraint!(p88_constraints, PopulationConstraint(4, 4))
+        p88_proposal = [(0.1, build_lifted_tree_cycle_walk(p88_constraints)),
+                        (0.9, build_internal_forest_walk(p88_constraints))]
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, 1.0)
+        scores, target_w = annealed_smc_scores_and_targets(measure)
+        K = length(scores)
+        path = LinearPath{K}(t -> ntuple(k -> t * target_w[k], K))
+
+        rng = PCG.PCGStateOneseq(UInt64, 31337)
+        partition = LinkCutPartition(annealed_smc_graph, p88_constraints, 4; rng=rng)
+        sched = FixedSchedule(range(0, 1; length=41); ess_frac=0.5)
+        particles, _, _ = run_annealed_smc!(partition, p88_proposal, measure, sched,
+                                            64, 200, rng; path=path, init_steps=1000,
+                                            collect_steps=0)
+
+        # weight each surviving particle by exp(logW) and histogram its cut edges
+        lw = [p.logW for p in particles]
+        mx = maximum(lw)
+        w  = exp.(lw .- mx)
+        acc = Dict{Int, Float64}()
+        for (p, wi) in zip(particles, w)
+            ce = get_cut_edge_sum(p.state, column="connections")
+            acc[ce] = get(acc, ce, 0.0) + wi
+        end
+        tot = sum(values(acc))
+        truth = Dict(8 => 1/117, 10 => 14/117, 11 => 24/117, 12 => 78/117)
+        # every observed cut count must be one the enumeration knows about
+        @test issubset(Set(keys(acc)), Set(keys(truth)))
+        # 64 particles is a small histogram, so this is a loose shape check: the
+        # 12-cut plans carry 2/3 of the mass and the 8-cut plan almost none.
+        @test get(acc, 12, 0.0)/tot > 0.4
+        @test get(acc, 8, 0.0)/tot < 0.10
+        l1 = sum(abs(get(acc, k, 0.0)/tot - truth[k]) for k in keys(truth))
+        @test l1 < 0.35
+    end
+
+    @testset "schedules are reusable across runs" begin
+        # Schedules carry a cursor and finish a run exhausted. Before reset_schedule!
+        # the second run with the same object did zero blocks and returned logZ=0.0 --
+        # silently, with no error and an empty trace.
+        p88_constraints = initialize_constraints()
+        add_constraint!(p88_constraints, PopulationConstraint(4, 4))
+        p88_proposal = [(0.1, build_lifted_tree_cycle_walk(p88_constraints)),
+                        (0.9, build_internal_forest_walk(p88_constraints))]
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, 1.0)
+        sched = FixedSchedule(range(0, 1; length=11); ess_frac=0.5)
+
+        results = map(1:2) do _
+            rng = PCG.PCGStateOneseq(UInt64, 4242)
+            part = LinkCutPartition(annealed_smc_graph, p88_constraints, 4; rng=rng)
+            _, logZ, trace = run_annealed_smc!(part, p88_proposal, measure, sched,
+                                               8, 20, rng; init_steps=100)
+            (logZ, length(trace))
+        end
+        # same seed and a reset schedule => the second run must reproduce the first
+        @test results[1][2] == results[2][2] == 10
+        @test results[1][1] ≈ results[2][1]
+        @test results[2][1] != 0.0
+
+        # reset_schedule! is idempotent and returns the schedule
+        @test CycleWalk.reset_schedule!(sched) === sched
+        @test sched.k == 0
+        adaptive = AdaptiveTempering(; ess_target=0.5)
+        adaptive.t_prev = 1.0
+        @test CycleWalk.reset_schedule!(adaptive).t_prev == 0.0
+    end
+
+    @testset "AdaptiveTempering rejects init_steps=0" begin
+        # With no burn-in every particle is an identical clone, ESS is identically N,
+        # and the bisection jumps straight to t=1 on that false signal.
+        measure = make_measure()
+        rng = PCG.PCGStateOneseq(UInt64, 5150)
+        partition = fresh_partition(5150)
+        @test_throws ArgumentError run_annealed_smc!(
+            partition, proposal, measure, AdaptiveTempering(; ess_target=0.5),
+            8, 10, rng; init_steps=0)
+        # FixedSchedule is merely inadvisable there, not rejected
+        sched = FixedSchedule(range(0, 1; length=4); ess_frac=0.5)
+        @test run_annealed_smc!(partition, proposal, measure, sched, 4, 5, rng;
+                                init_steps=0) isa Tuple
+    end
+
     @testset "zero path => zero weights and logZ == 0" begin
         # a path that is identically zero injects no incremental weight anywhere
         partition = fresh_partition(707)
