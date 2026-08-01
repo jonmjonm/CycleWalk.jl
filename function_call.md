@@ -129,8 +129,8 @@ against every node's raw attributes with
 stored under `name`, which then behaves as an ordinary column (usable as
 `geo_units`, `pop_col`, or an energy's column argument). `expr` may only reference raw
 columns, not another entry of `specs`. Errors if `name` collides with an existing
-column. This is what `run_cyclewalk_toml.jl`'s `[plans.derive]` table calls — the
-AIS/SMC/PT TOML runners do not call it, so `[plans.derive]` has no effect there.
+column. This is what every TOML runner's `[plans.derive]` table calls
+(`run_cyclewalk_toml.jl`, `run_ais_toml.jl`, `run_asmc_toml.jl`, `run_pt_toml.jl`).
 
 ---
 

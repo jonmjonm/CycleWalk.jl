@@ -13,10 +13,8 @@ This document covers what's specific to annealed SMC — the `[smc]` table, the 
 schedules, and post-anneal amplification. `[plans]` and `[measure]` are read the same
 way every other TOML runner reads them — see
 [`run_cyclewalk_toml.md`](run_cyclewalk_toml.md#plans--the-map-and-the-districts) for
-those — with two exceptions this runner does not support: `[plans.derive]` (computed
-node columns) is silently ignored, since only `run_cyclewalk_toml.jl` calls
-`derive_node_columns!`; and `[[measure.energy]] context` may not include `"base_graph"`
-(only `"graph"`, `"num_dists"`, `"pop_col"` are available here).
+those, including `[plans.derive]` (computed node columns) and `[[measure.energy]]
+context = ["base_graph"]`, both of which this runner now supports too.
 
 - [Quick start](#quick-start)
 - [A minimal configuration](#a-minimal-configuration)

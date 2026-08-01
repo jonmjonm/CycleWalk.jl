@@ -96,9 +96,16 @@ blas_threads > 0 && BLAS.set_num_threads(blas_threads)
 node_data = Set(node_data)
 pctGraphPath = joinpath(map_directory..., map_file)
 isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
-graph = Graph(pctGraphPath, pop_col, geo_units[1]; inc_node_data=node_data,
-              area_col=area_col, node_border_col=node_border_col,
-              edge_perimeter_col=edge_perimeter_col)
+base_graph = BaseGraph(pctGraphPath, pop_col, inc_node_data=node_data,
+                       area_col=area_col, node_border_col=node_border_col,
+                       edge_perimeter_col=edge_perimeter_col)
+# [plans.derive]: named columns computed from existing ones — see
+# docs/run_cyclewalk_toml.md. Must run before `Graph` below, since geo_units/pop_col
+# can name a derived column, and by the time anything looks a column up it has to
+# already exist.
+haskey(params["plans"], "derive") &&
+    derive_node_columns!(base_graph, params["plans"]["derive"])
+graph = Graph(base_graph, geo_units[1])
 
 constraints = initialize_constraints()
 add_constraint!(constraints, PopulationConstraint(graph, num_dists, pop_dev))
@@ -114,7 +121,7 @@ proposal = [(two_cycle_walk_frac, cycle_walk),
 # ---------------------------------------------------------------------------
 # target measure + tempering path
 # ---------------------------------------------------------------------------
-context = (graph=graph, num_dists=num_dists, pop_col=pop_col)
+context = (graph=graph, base_graph=base_graph, num_dists=num_dists, pop_col=pop_col)
 if temper_kind == "linear"
     measure, ramp = build_annealed_measure(measure_specs, measure_params; context=context)
     scores, target_w = annealed_smc_scores_and_targets(measure)
