@@ -1,5 +1,14 @@
 # Design decisions: parallel tempering in CycleWalk.jl
 
+> **Historical design record — parallel tempering has since shipped.** This file and
+> its companion roadmap predate the implementation and are kept as a record of the
+> options considered, not as current documentation. Several decisions described here
+> changed during implementation: `DistributedBackend` (§1.5 and elsewhere) was never
+> built (only `SerialBackend`/`ThreadedBackend` exist), and the three-mode
+> `temper = "all"/"gamma"/"explicit"` scheme was unified into the simpler
+> `temper = "linear"/"path"` design that shipped. For the current, accurate reference,
+> see [`docs/run_pt_toml.md`](../docs/run_pt_toml.md).
+
 > **Building it? Start with
 > [`parallel_tempering_implementation.md`](parallel_tempering_implementation.md)**, the
 > ordered task roadmap with code sketches, acceptance checks, and the full test plan.

@@ -239,6 +239,7 @@ Keys of a `[[measure.energy]]` block:
 | `name` | string | **required** | An energy **exported** by `CycleWalk`, or a builder returning one. Unexported names are refused, so a config cannot reach into internals. |
 | `weight` | number or string | **required** | The weight in front of this energy. A string is arithmetic over the `[measure]` parameters. **A weight of `0` drops the energy from the measure** (unless it has a nonzero `weight_start`). |
 | `weight_start` | number or string | *none* | Only meaningful for annealed runs (AIS/SMC): the weight the schedule starts from, with `weight` as the target. `run_cyclewalk_toml.jl` ignores it. Present with a zero `weight`, it keeps the energy in the measure so a schedule can ramp it. |
+| `weight_path` | string | *none* | Only meaningful for parallel tempering's `temper = "path"` mode (see `run_pt_toml.md`): an arbitrary expression in `t`. `run_cyclewalk_toml.jl` ignores it, same as `weight_start`. An energy may not set both `weight_start` and `weight_path`. |
 | `args` | array | `[]` | Literal arguments for a builder, passed positionally after any `context`. |
 | `kwargs` | table | `{}` | Keyword arguments for a builder. |
 | `context` | array of strings | `[]` | Values the *runner* supplies because a config cannot write them down, passed before `args`. This runner offers `"graph"`, `"base_graph"`, `"num_dists"`, `"pop_col"`. |
@@ -520,16 +521,16 @@ unchanged from the atlas; only the forest coordinate is refreshed.
 | `map file not found: …` | `map_directory`/`map_file` do not resolve from the current directory. Run from `examples`. |
 | `… already exists, and this run would truncate it` | An Atlas of that name is there. Use `--overwrite`, `io_mode = "a"`, or change `thread_id`. |
 | `unknown energy "x": CycleWalk exports no such name` | Typo, or a name that exists but is not exported. |
-| `energy "x" has unknown key "y"` | A `[[measure.energy]]` key outside `name`/`weight`/`weight_start`/`args`/`kwargs`/`context`/`desc`. |
+| `energy "x" has unknown key "y"` | A `[[measure.energy]]` key outside `name`/`weight`/`weight_start`/`weight_path`/`args`/`kwargs`/`context`/`desc`. |
 | `energy "x" has no weight` | Every energy block needs a weight — there is no default. |
-| `the expression "…" refers to "z", which …` | A weight names a parameter that is not a number in `[measure]`. |
+| `the expression "…" refers to "z", which …` | Most often a plain typo — `z` isn't a name in `[measure]` at all. Also fires if `z` is a `[measure]` key whose value isn't a number (e.g. a string). |
 | `energies "a" and "b" are the same function` | Two blocks resolve to one function; a measure can weight it once. |
 | `[measure] has both an [[measure.energy]] list and a measure_scores list` | Pick one form. |
 | `could not build energy "x" from its configured arguments` | A builder rejected the `args`/`kwargs` — often TOML arrays where the builder wants tuples. |
 | `--set … the config has no [t] table` | Mistyped table name. |
 | `--gamma and --set measure.gamma both set the same value` | One or the other. |
 | `AssertionError: 0 ≤ two_cycle_walk_frac ≤ 1` | Exactly that. |
-| `derived column "x" is not a string` / `derived column "x"'s expression … is not a string` | A `[plans.derive]` entry's name or expression isn't a TOML string. |
+| `derived column name "x" is not a string` / `derived column "x"'s expression … is not a string` | A `[plans.derive]` entry's name or expression isn't a TOML string. |
 | `derived column "x" collides with a column already on the graph …` | The name is already a raw column, or an earlier `[plans.derive]` entry in the same run. Pick a different name. |
 | `the expression "…" refers to "z", which is not a known column` | A `[plans.derive]` expression names a column that isn't one of the graph's raw columns — remember derived expressions can't reference each other, only raw columns. |
 | `column "z" is …, neither a number nor a string` | A `[plans.derive]` expression referenced a raw column whose value isn't numeric or string-valued. |

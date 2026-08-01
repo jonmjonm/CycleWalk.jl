@@ -31,6 +31,8 @@ Conventions used below:
 - [Writer (Atlas output)](#writer-atlas-output)
 - [Running the Sampler](#running-the-sampler)
 - [Annealed Importance Sampling & SMC](#annealed-importance-sampling--smc)
+- [Parallel Tempering](#parallel-tempering)
+- [Run Metadata & Provenance](#run-metadata--provenance)
 - [Chain (convenience wrapper)](#chain-convenience-wrapper)
 - [Data Structures & Types Summary](#data-structures--types-summary)
 
@@ -111,6 +113,24 @@ Re-exported graph-construction helper from `MetropolizedForestRecom`.
 ### `cluster_base_graph`
 
 Re-exported helper that clusters a base graph into coarser units.
+
+### `derive_node_columns!(base_graph, specs)`
+
+```julia
+derive_node_columns!(base_graph::BaseGraph, specs) -> base_graph
+```
+
+Compute new node attributes from existing ones — e.g. a unique node name joined from
+two columns that aren't unique alone, or a population adjusted by another column —
+before `MultiLevelGraph` is built. `specs` is a `name => expr` mapping (an
+`OrderedDict` or `Vector{Pair}` if evaluation order matters); each `expr` is evaluated
+against every node's raw attributes with
+[`evaluate_column_expression`](#weight_path_closure--evaluate_column_expression) and
+stored under `name`, which then behaves as an ordinary column (usable as
+`geo_units`, `pop_col`, or an energy's column argument). `expr` may only reference raw
+columns, not another entry of `specs`. Errors if `name` collides with an existing
+column. This is what `run_cyclewalk_toml.jl`'s `[plans.derive]` table calls — the
+AIS/SMC/PT TOML runners do not call it, so `[plans.derive]` has no effect there.
 
 ---
 
@@ -278,6 +298,22 @@ proposal = [(twocycle_frac, build_two_tree_cycle_walk(constraints)),
             (1.0 - twocycle_frac, build_one_tree_cycle_walk(constraints))]
 ```
 
+### `name_proposal!` / `proposal_name` / `describe_proposal`
+
+```julia
+name_proposal!(f::Function, name::AbstractString) -> f
+proposal_name(f::Function)::String
+describe_proposal(proposal::Function)::String
+describe_proposal(proposal::Vector{Tuple{<:Real,Function}})::Vector{Dict}
+```
+
+Optional human-readable naming for a proposal closure, so run metadata reads e.g.
+`two_tree_cycle_walk` rather than an anonymous closure name. The `build_*` proposal
+constructors already tag their returned closures; call `name_proposal!` yourself to
+name a custom proposal. `proposal_name` falls back to `string(f)` when nothing was
+registered. `describe_proposal` is what the run-metadata functions (below) call to
+serialize a proposal or weighted-mixture into a run's Atlas header.
+
 ---
 
 ## Measures, Energies & Observables
@@ -413,6 +449,21 @@ A spec whose target `weight` is zero but whose `weight_start` is not is kept in 
 measure (`push_energy!`'s `allow_zero`), because an energy annealed *down* to zero
 must be present for a schedule to ramp it.
 
+### `build_path_measure`
+
+```julia
+build_path_measure(specs::AbstractVector{EnergySpec}, parameters::AbstractDict;
+                   context=(;)) -> (measure::Measure, path::AnnealPath)
+```
+
+The `weight_path` counterpart to `build_annealed_measure`: builds the target
+`Measure` and, alongside it, a `LinearPath` (`AnnealPath` subtype) tempering it. For
+each spec with a `weight_path` expression, the path evaluates that expression in `t`
+(parsed and validated once, via `weight_path_closure`, not re-parsed per round); for
+one without, the path holds constant at `weight`. This is what `[ais]`/`[smc]`/`[pt]
+temper = "path"` build from. `weight_path` and `weight_start` are mutually exclusive
+per spec — pick one tempering mode for the whole run, not mixed per energy.
+
 ### `weight_expression_parameters` / `referenced_parameters`
 
 ```julia
@@ -458,6 +509,24 @@ Atlas headers written elsewhere. Expressions nesting deeper than
 `CycleWalk.MAX_WEIGHT_EXPRESSION_NODES` (100) are rejected, as is any result that is
 not a finite real — an `Inf` or `NaN` weight would silently change the target rather
 than fail.
+
+### `weight_path_closure` / `evaluate_column_expression`
+
+```julia
+weight_path_closure(expr::AbstractString, parameters::AbstractDict)::Function   # t::Float64 -> Float64
+evaluate_column_expression(expr::AbstractString, columns::AbstractDict)::Union{Float64, String}
+```
+
+`weight_path_closure` parses a `weight_path` expression once (same restricted grammar
+as `evaluate_weight_expression`, plus a bound `t`) and returns a closure evaluating it
+at any `t` — what `build_path_measure` calls per energy so the parse/validate cost is
+paid once at startup, not once per round.
+
+`evaluate_column_expression` is the same grammar applied at the graph layer instead of
+the measure layer: it evaluates an expression against a node's raw column values
+(allowing string-valued columns and string concatenation, unlike
+`evaluate_weight_expression`, since composing names/ids is its whole point) and is
+what `derive_node_columns!` calls per node, per `[plans.derive]` entry.
 
 ### `get_log_energy`
 
@@ -534,7 +603,7 @@ Diagnostics record per-proposal statistics during a run. They live in a
 | Type | Description |
 | --- | --- |
 | `RunDiagnostics` | `Dict{Function, Tuple{String, ProposalDiagnostics}}` — diagnostics per proposal. |
-| `ProposalDiagnostics` | `Dict{Type, AbstractProposalDiagnostics}` — diagnostics of a single proposal. |
+| `ProposalDiagnostics` | `Dict{Type, AbstractProposalDiagnostics}` — diagnostics of a single proposal. **Not exported** — this alias is internal; refer to it as `CycleWalk.ProposalDiagnostics` if needed. `push_diagnostic!`/`RunDiagnostics` are the exported surface for using it. |
 
 ### `push_diagnostic!`
 
@@ -651,6 +720,23 @@ observable `f(partition)` (e.g. `get_isoperimetric_score`, `get_log_spanning_for
 evaluated on the intermediate annealing partition. Recording is fully opt-in: with no
 recorders registered there is no added cost.
 
+### `stamp_execution_metadata!`
+
+```julia
+stamp_execution_metadata!(writer::Writer; include_script::Bool=true,
+                          max_include_bytes::Int=MAX_INCLUDE_BYTES)
+```
+
+Fill in provenance fields on `writer`'s Atlas header that aren't already set: the OS
+user (`"user"`, `"user_full_name"`), `"julia_version"`, and — when running as a
+script (`PROGRAM_FILE` non-empty) — `"script_name"` and, with `include_script=true`,
+the script's own source text (`"script"`, capped at `max_include_bytes`) and any
+files it `include`s (`"script_includes"`), so the exact code that produced an Atlas
+travels with it. This is what lets `run_cyclewalk_extend.jl` warn when the includes
+on disk have drifted from what a parent run actually used. Existing keys are never
+overwritten — call it before or after a run-metadata builder merges its own keys in,
+either order is safe.
+
 ### `close_writer`
 
 ```julia
@@ -721,7 +807,8 @@ run_metropolis_hastings!(
     prestepf::Function=(x...)->nothing,
     prestepargs::Tuple=(),
     output_initial::Bool=true,
-    weight::Union{Real, MutableFloat}=1
+    weight::Union{Real, MutableFloat}=1,
+    seed=nothing
 )
 ```
 
@@ -735,7 +822,10 @@ each proposal — this is the hook [`run_annealed_importance_sampling!`](#run_an
 uses to anneal `measure` and accumulate the log importance weight. `weight` is
 recorded as each output map's sampling weight; ordinary runs can leave it at the
 default `1` (a plain MCMC sample). `prestepf`/`prestepargs`/`weight` are the
-low-level hooks AIS is built on — most callers won't need them directly.
+low-level hooks AIS is built on — most callers won't need them directly. `seed`, if
+given, is stamped into the run metadata written to `writer`'s Atlas header (via
+[`metropolis_hastings_run_metadata`](#run-metadata--provenance)) — it does not seed
+`rng` itself, which the caller already constructed.
 
 ---
 
@@ -752,32 +842,42 @@ run_annealed_importance_sampling!(
     partition::LinkCutPartition,
     proposal::Union{Function, Vector{Tuple{<:Real, Function}}},
     measure::Measure,
-    modify_measure!::Function,
     total_steps::Int,
     base_steps_per_sample::Int,
     steps_per_annealing::Int,
     rng::AbstractRNG;
+    path::Union{AnnealPath, Function, Nothing}=nothing,
     writer::Union{Writer, Nothing}=nothing,
     run_diagnostics::RunDiagnostics=RunDiagnostics(),
-    ntasks::Int=1
+    ntasks::Int=1,
+    seed=nothing
 )::Vector{Float64}
 ```
 
 Run annealed importance sampling (AIS) and return the vector of log importance
-weights, one per annealing run. `modify_measure!(measure, cur_step, total_steps)`
-defines the annealing schedule: called with `(0, 1)` it must set `measure` to the
-base measure, and stepping `cur_step` from 1 to `total_steps` it must interpolate
-toward the target measure. The base chain runs on `partition` under the base
-measure for `base_steps_per_sample` Metropolis–Hastings steps between samples;
-each sample is then deep-copied and annealed toward the target for
-`steps_per_annealing` steps while its log weight is accumulated. The base chain
-takes `total_steps` steps in all, so `total_steps ÷ base_steps_per_sample`
-annealing runs are performed.
+weights, one per annealing run. `path` (default: [`linear_path`](#linear_path) built
+from `measure`'s target weights — the same convention `run_annealed_smc!` uses)
+defines the annealing schedule: it must give the base measure at `t=0` and the
+target measure at `t=1`; a bare `t ↦ NTuple` function is wrapped as a `LinearPath`
+automatically. The base chain runs on `partition` under the base measure for
+`base_steps_per_sample` Metropolis–Hastings steps between samples; each sample is
+then deep-copied and annealed toward the target for `steps_per_annealing` steps
+while its log weight is accumulated. The base chain takes `total_steps` steps in
+all, so `total_steps ÷ base_steps_per_sample` annealing runs are performed.
 
 Annealing runs execute on `ntasks` concurrent tasks (use `julia -t N` to give them
-threads); each run gets an independent, reproducible RNG. If a `writer` is
-supplied — construct it with `weight_type=Float64` — sample `i` is written as map
-`"sample<i>"` with its log importance weight as the map's weight.
+threads); each run gets an independent RNG seeded sequentially off `rng`, so log
+weights are reproducible and identical for every `ntasks`. **Scaling ceiling**: the
+base chain is serial, so by Amdahl's law the speedup from `ntasks` is capped at
+`(base_steps_per_sample + steps_per_annealing) / base_steps_per_sample`, regardless
+of how many threads are given. Whenever `ntasks > 1`, BLAS is pinned to 1 thread for
+the duration of the run (several tasks each spawning their own BLAS pool for the
+spanning-forest energy's log-determinant would oversubscribe the machine) and
+restored to its prior value on exit. If a `writer` is supplied — construct it with
+`weight_type=Float64` — sample `i` is written as map `"sample<i>"` with its log
+importance weight as the map's weight, in base-chain order regardless of which task
+finishes first. `seed`, if given, is stamped into the run metadata written to
+`writer`'s Atlas header.
 
 ### `run_annealed_smc!`
 
@@ -796,7 +896,8 @@ run_annealed_smc!(
     collect_every::Int=100,
     resample_before_collect::Bool=true,
     writer::Union{Writer, Nothing}=nothing,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    seed=nothing
 ) -> (particles, logZ, trace)
 ```
 
@@ -834,7 +935,16 @@ AdaptiveTempering(; ess_target=0.5)
 ```
 
 Chooses each `t_next` online so the population ESS drops to `ess_target *
-n_particles`, resampling every step.
+n_particles`, resampling every step. Requires `init_steps > 0` in
+`run_annealed_smc!` — an unburned population is `n_particles` identical clones, so
+every incremental weight is equal, ESS stays at `n_particles` regardless of `t`, and
+the bisection jumps straight to `t=1` on that false signal (`run_annealed_smc!`
+raises an `ArgumentError` rather than silently doing this).
+
+Both schedule types carry a cursor (`FixedSchedule`'s grid index, `AdaptiveTempering`'s
+`t_prev`) that a finished run leaves exhausted. `reset_schedule!(schedule)` returns it
+to the start so the same object can drive another run; `run_annealed_smc!` calls this
+on entry, so most callers never need it directly.
 
 ### `LinearPath` / `linear_path`
 
@@ -856,6 +966,159 @@ annealed_smc_scores_and_targets(measure::Measure) -> (scores, target_w)
 
 Freeze a target `measure` into an ordered tuple of energy functions (`scores`)
 and their target weights (`target_w`), the inputs `linear_path` expects.
+
+---
+
+## Parallel Tempering
+
+A ladder of replicas ("rungs"), one per point on a `BetaLattice` from the untempered
+base measure (rung 1, β=0) to the target (rung `M`, β=1), periodically proposing swaps
+between adjacent rungs so samples move between temperatures instead of annealing
+alone. Shares the same [`AnnealPath`](#linearpath--linear_path) seam annealed SMC uses
+— PT calls its schedule variable β where SMC calls it `t`, but it is the same slot.
+See [`docs/run_pt_toml.md`](docs/run_pt_toml.md) for the full `[pt]` config reference.
+
+### `BetaLattice` / `linear_betas` / `geometric_betas`
+
+```julia
+BetaLattice(betas::AbstractVector{<:Real})
+linear_betas(M::Int) -> BetaLattice
+geometric_betas(M::Int; beta_min::Float64=0.05) -> BetaLattice
+```
+
+The inverse-temperature lattice: rung `k` sits at `betas[k]`, strictly increasing,
+`betas[1] >= 0`, `betas[end] == 1.0`. `linear_betas` spaces `M` rungs evenly on
+`[0,1]`; `geometric_betas` spaces them geometrically in temperature (`1/β`) between
+`beta_min` and `1` (cannot include β=0 — prepend it explicitly, or use `linear_betas`,
+for the exact base measure).
+
+### `run_parallel_tempering!`
+
+```julia
+run_parallel_tempering!(
+    partition::LinkCutPartition,
+    proposal::Union{Function, Vector{Tuple{<:Real, Function}}},
+    measure::Measure,
+    lattice::BetaLattice,
+    swap_interval::Int,
+    n_rounds::Int,
+    rng::AbstractRNG;
+    path::Union{AnnealPath, Function, Nothing}=nothing,
+    backend::PTBackend=SerialBackend(proposal),
+    heat_bath::Union{HeatBath, Nothing}=nothing,
+    init_steps::Int=0,
+    write_rungs::Symbol=:target,          # :target | :all | :none
+    output_every::Int=1,
+    writers::Union{Vector{Writer}, Writer, Nothing}=nothing,
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    diagnostics::Union{PTDiagnostics, Nothing}=nothing,
+    seed=nothing,
+) -> (ensemble, diagnostics)
+```
+
+`M = length(lattice)` replicas are cloned from `partition`, one per rung, each with
+its own RNG (seeded sequentially from `rng`), diagnostics, and private `work_measure`.
+After an optional `init_steps` per-rung burn-in, each round advances every replica
+`swap_interval` MH steps at its own rung (via `backend`), then attempts one swap per
+adjacent rung pair on a deterministic even/odd schedule, for `n_rounds` rounds. An
+optional `heat_bath` exchanges the rung the swap pattern leaves idle against an
+independent draw from a reference Atlas. `write_rungs` controls which rungs' states
+reach `writers` (`:target` — rung `M` only; `:all` — every rung; `:none`). Returns the
+final `PTEnsemble` and the `PTDiagnostics` gathered (swap rates, round trips,
+straggler gaps).
+
+### `SerialBackend` / `ThreadedBackend`
+
+```julia
+SerialBackend(proposal)
+ThreadedBackend(proposal)
+```
+
+The two `PTBackend`s `run_parallel_tempering!` can advance replicas with.
+`SerialBackend` is a plain loop; `ThreadedBackend` spawns one task per rung via
+`Threads.@spawn` and is verified bit-identical to `SerialBackend` for the same seed
+regardless of thread count (`test/test_parallel_tempering.jl`) — give it `-t N`
+matching or exceeding `M`, since extra threads beyond `M` sit idle and fewer just
+queue replicas within a round. No `DistributedBackend` exists yet.
+
+### `HeatBath` / `parse_bath_measure` / `parse_bath_samples` / `try_heat_bath!`
+
+```julia
+HeatBath(source_path::String, target_scores::NTuple{K,Function}, rng::AbstractRNG;
+         rung::Int=1, burn_in::Int=0, n_samples::Union{Int,Nothing}=nothing,
+         context=(;)) -> HeatBath
+
+parse_bath_measure(source_path::String; context=(;)) -> Measure
+parse_bath_samples(source_path::String, burn_in::Int, n::Int, rng::AbstractRNG) -> Vector{Dict}
+try_heat_bath!(ensemble::PTEnsemble, hb::HeatBath, round::Int, rng::AbstractRNG,
+               diag::PTDiagnostics)
+```
+
+`HeatBath` holds independent draws from a reference measure, read from a stored
+Atlas (which must have been written with an embedded `config_file`, so its own
+reference measure can be rebuilt), exchanged against `rung` (default 1, the hottest)
+on rounds the swap pattern leaves it idle. Each stored sample is consumed at most
+once — the run errors up front if the source doesn't have `n_samples` unused maps
+past `burn_in`, rather than wrapping around and correlating exchanges. `parse_bath_measure`/
+`parse_bath_samples` do the construction; `try_heat_bath!` is the exchange move itself,
+called internally by `run_parallel_tempering!`.
+
+### `PTDiagnostics` / `reset_pt_diagnostics!` / `swap_rate`
+
+```julia
+PTDiagnostics(M::Int)
+reset_pt_diagnostics!(d::PTDiagnostics) -> d
+swap_rate(d::PTDiagnostics) -> Vector{Float64}
+```
+
+Per-run PT diagnostics: `attempts`/`accepts`/`accept_prob_sum` per adjacent rung pair,
+`occupancy[w,k]` (blocks walker `w` spent at rung `k`), `round_trips[w]` (completed
+rung-`M` → rung-1 → rung-`M` journeys — the single most informative PT diagnostic),
+`bath_attempts`/`bath_accepts`, and `straggler_gap` (per-block max−mean replica advance
+time, for sizing `swap_interval`). Stateful — `run_parallel_tempering!` calls
+`reset_pt_diagnostics!` on entry, so one object may drive several runs.
+`swap_rate(d)` gives the empirical acceptance rate per adjacent pair; a well-placed
+lattice has these roughly *equal* across pairs, not maximized.
+
+---
+
+## Run Metadata & Provenance
+
+Each sampler entry point has a matching builder here returning a `Dict{String,Any}`
+describing the run: a human-readable `"chain.run"` tag plus a nested
+`"chain.parameters"` dict (schedule, walker/particle/rung count, chain lengths,
+resampling, annealing endpoints, seed, proposal, …). Every `run_*!` function calls its
+builder automatically and stamps the result into `writer`'s Atlas header before the
+header is written — call one directly only to precompute the dict yourself. The
+target measure itself (energies, weights, population bounds, constraints) is already
+recorded by `Writer`, so these builders add only run/annealing-specific information.
+
+```julia
+metropolis_hastings_run_metadata(proposal, steps; seed=nothing, output_freq=250,
+                                 extra=Dict()) -> Dict{String,Any}
+
+annealed_importance_sampling_run_metadata(measure, total_steps,
+    base_steps_per_sample, steps_per_annealing; seed=nothing, path=nothing,
+    proposal=nothing, ntasks=1, extra=Dict()) -> Dict{String,Any}
+
+annealed_smc_run_metadata(measure, schedule, n_particles, rejuv_steps;
+    seed=nothing, path=nothing, proposal=nothing, init_steps=0, collect_steps=0,
+    collect_every=100, resample_before_collect=true, extra=Dict()) -> Dict{String,Any}
+
+parallel_tempering_run_metadata(measure, lattice, swap_interval, n_rounds;
+    seed=nothing, path=nothing, proposal=nothing, backend=SerialBackend(proposal),
+    init_steps=0, write_rungs=:target, output_every=1, heat_bath=nothing,
+    extra=Dict()) -> Dict{String,Any}
+```
+
+Each records the annealing-path endpoints (`weights_at(path, 0)`/`weights_at(path, 1)`,
+labelled by score) directly from the `AnnealPath` actually used — the same
+introspectable seam `run_annealed_smc!` and `run_parallel_tempering!` share, and (for
+AIS) a replacement for the older `modify_measure!` closure, which had no way to be
+inspected or logged this way. `proposal` is recorded via
+[`describe_proposal`](#name_proposal--proposal_name--describe_proposal). `extra` is
+merged into the parameters dict for a caller's own additions; `seed` is recorded only
+when given, since a run function sees only the `rng` object, not its original seed.
 
 ---
 
@@ -902,10 +1165,15 @@ run_chain!(partition, chain::Chain, steps::Union{Int, Tuple{Int,Int}})
 | `Writer` | mutable struct | CycleWalk |
 | `FixedSchedule` | mutable struct | CycleWalk |
 | `AdaptiveTempering` | mutable struct | CycleWalk |
+| `AnnealPath` | abstract type | CycleWalk, **not exported** — `FixedSchedule`/`AdaptiveTempering`/`LinearPath` are the exported surface; refer to it as `CycleWalk.AnnealPath` if needed. |
 | `LinearPath{K,F}` | struct | CycleWalk |
+| `BetaLattice` | struct | CycleWalk |
+| `HeatBath` | struct | CycleWalk |
+| `PTDiagnostics` | mutable struct | CycleWalk |
+| `SerialBackend{P}` / `ThreadedBackend{P}` | struct / mutable struct | CycleWalk |
 | `Chain{T}` | mutable struct | CycleWalk |
 | `RunDiagnostics` | type alias (`Dict`) | CycleWalk |
-| `ProposalDiagnostics` | type alias (`Dict`) | CycleWalk |
+| `ProposalDiagnostics` | type alias (`Dict`) | CycleWalk, **not exported** — refer to it as `CycleWalk.ProposalDiagnostics` if needed; use `RunDiagnostics`/`push_diagnostic!` directly instead. |
 | `AcceptanceRatios` | struct | CycleWalk |
 | `CycleLengthDiagnostic` | struct | CycleWalk |
 | `DeltaNodesDiagnostic` | struct | CycleWalk |

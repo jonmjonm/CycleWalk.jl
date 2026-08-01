@@ -1,7 +1,7 @@
 # =============================================================================
 # Parallel tempering — swap mechanics and driver
 #
-# See docs/parallel_tempering_implementation.md (tasks 3-6) for the design
+# See memories/parallel_tempering_implementation.md (tasks 3-6) for the design
 # rationale. Types (BetaLattice, Replica, PTEnsemble, HeatBath, PTDiagnostics) live
 # in parallel_tempering_types.jl; the AnnealPath seam (energy_at, weights_at,
 # configure_measure!) lives in anneal_path.jl and is shared with annealed_smc.jl.

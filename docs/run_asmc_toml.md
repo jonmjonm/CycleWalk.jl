@@ -10,10 +10,13 @@ every setting from a TOML file, the same way
 [`run_pt_toml.jl`](../examples/run_pt_toml.jl) do, plus CLI flags that override it.
 
 This document covers what's specific to annealed SMC — the `[smc]` table, the two
-schedules, and post-anneal amplification. **`[plans]` and `[measure]` are identical to
-every other TOML runner** — see
+schedules, and post-anneal amplification. `[plans]` and `[measure]` are read the same
+way every other TOML runner reads them — see
 [`run_cyclewalk_toml.md`](run_cyclewalk_toml.md#plans--the-map-and-the-districts) for
-those.
+those — with two exceptions this runner does not support: `[plans.derive]` (computed
+node columns) is silently ignored, since only `run_cyclewalk_toml.jl` calls
+`derive_node_columns!`; and `[[measure.energy]] context` may not include `"base_graph"`
+(only `"graph"`, `"num_dists"`, `"pop_col"` are available here).
 
 - [Quick start](#quick-start)
 - [A minimal configuration](#a-minimal-configuration)
@@ -226,7 +229,9 @@ Flags: `--schedule`, `--temper`, `--particles`, `--blocks`, `--rejuv`, `--init-s
   [`fixed` and `adaptive` schedules](#fixed-and-adaptive-schedules); raise `init_steps`
   or switch to `schedule = "fixed"`.
 - `[measure] defines a parameter named "t", which is reserved for weight_path
-  expressions` — only relevant with `temper = "path"`; rename the parameter.
+  expressions` — `t` is checked unconditionally while parsing `[measure]`, before
+  `[smc] temper` is even read, so this fires under `temper = "linear"` too; rename the
+  parameter.
 - `energy "..." has both weight_start and weight_path` — pick one tempering mode per
   energy.
 - `map file not found: ...` — `[plans] map_directory`/`map_file` don't resolve to a
