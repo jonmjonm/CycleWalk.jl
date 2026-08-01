@@ -65,74 +65,39 @@
         end
     end
 
-    @testset "AIS stamps its tag, schedule endpoints, and sample count" begin
+    @testset "AIS stamps its tag and weight endpoints" begin
         mktempdir() do dir
             path = joinpath(dir, "ais.jsonl.gz")
             p = fresh_partition(2)
             m = make_measure()
-            base_w = Dict(get_log_spanning_forests => 0.0,
-                          get_isoperimetric_score => 0.0)
-            tgt_w = Dict(get_log_spanning_forests => 0.7,
-                         get_isoperimetric_score => 0.3)
-            modify_measure! = (mm, step, total) -> begin
-                frac = step / total
-                for (f, tw) in tgt_w
-                    mm.weights[f] = base_w[f] + (tw - base_w[f]) * frac
-                end
-            end
+            # a genuinely nonlinear schedule — get_log_spanning_forests reaches its
+            # target quadratically, get_isoperimetric_score linearly. AnnealPath is
+            # introspectable by construction (unlike the old modify_measure!), so
+            # the header's weights.base/weights.target need no defensive sampling
+            # to trust; they're read straight from the path.
+            K = 2
+            scores0, target_w = annealed_smc_scores_and_targets(m)
+            gamma_idx = findfirst(==(get_log_spanning_forests), scores0)
+            iso_idx   = findfirst(==(get_isoperimetric_score), scores0)
+            path_fn = LinearPath{K}(t -> ntuple(k ->
+                k == gamma_idx ? target_w[k]*t^2 : target_w[k]*t, K))
+
             w = Writer(m, constraints, p, path; weight_type=Float64)
-            run_annealed_importance_sampling!(p, proposal, m, modify_measure!,
-                                              40, 20, 30,
+            run_annealed_importance_sampling!(p, proposal, m, 40, 20, 30,
                                               PCG.PCGStateOneseq(UInt64, 2);
-                                              writer=w, seed=999, schedule="linear")
+                                              path=path_fn, writer=w, seed=999)
             close_writer(w)
 
             ap = read_atlas_param(path)
             @test ap["chain.run"] == "annealed importance sampling CycleWalk"
             params = ap["chain.parameters"]
             @test params["function"] == "run_annealed_importance_sampling!"
-            @test params["schedule"] == "linear"
             @test params["n_samples"] == 2      # total_steps ÷ base_steps_per_sample
             @test params["steps_per_annealing"] == 30
             @test params["seed"] == 999
             @test params["weights.base"]["get_log_spanning_forests"] == 0.0
             @test params["weights.target"]["get_log_spanning_forests"] == 0.7
-
-            # `schedule` is an unverifiable caller-supplied label, so the header also
-            # records what modify_measure! ACTUALLY produces at t = 0, 1/4, ..., 1.
-            sampled = params["weights.schedule"]
-            @test Set(keys(sampled)) == Set(["0.0", "0.25", "0.5", "0.75", "1.0"])
-            @test sampled["0.0"]["get_log_spanning_forests"] == 0.0
-            @test sampled["0.5"]["get_log_spanning_forests"] ≈ 0.35
-            @test sampled["1.0"]["get_log_spanning_forests"] ≈ 0.7
-            @test params["schedule.is_linear"] == true
-        end
-    end
-
-    @testset "AIS schedule sampling detects a nonlinear ramp" begin
-        # The label says "linear"; the schedule is quadratic. schedule.is_linear must
-        # contradict it, so a reader can see the run for what it was.
-        mktempdir() do dir
-            path = joinpath(dir, "ais_quad.jsonl.gz")
-            p = fresh_partition(12)
-            m = make_measure()
-            modify_measure! = (mm, step, total) -> begin
-                frac = (step / total)^2               # deliberately NOT linear
-                mm.weights[get_log_spanning_forests] = 0.7 * frac
-                mm.weights[get_isoperimetric_score]  = 0.3 * frac
-            end
-            w = Writer(m, constraints, p, path; weight_type=Float64)
-            run_annealed_importance_sampling!(p, proposal, m, modify_measure!,
-                                              40, 20, 30,
-                                              PCG.PCGStateOneseq(UInt64, 12);
-                                              writer=w, schedule="linear")
-            close_writer(w)
-
-            params = read_atlas_param(path)["chain.parameters"]
-            @test params["schedule"] == "linear"          # the label, as passed
-            @test params["schedule.is_linear"] == false   # the evidence, as measured
-            # quadratic: at t=1/2 the weight is 1/4 of target, not 1/2
-            @test params["weights.schedule"]["0.5"]["get_log_spanning_forests"] ≈ 0.7/4
+            @test params["weights.target"]["get_isoperimetric_score"] == 0.3
         end
     end
 
@@ -158,6 +123,41 @@
             @test params["schedule"]["kind"] == "fixed"
             @test params["schedule"]["blocks"] == 5
             @test params["weights.target"]["get_isoperimetric_score"] == 0.3
+        end
+    end
+
+    @testset "PT stamps its tag, lattice, backend, and weight endpoints" begin
+        mktempdir() do dir
+            path = joinpath(dir, "pt.jsonl.gz")
+            p = fresh_partition(8)
+            m = make_measure()
+            lattice = linear_betas(4)
+            w = Writer(m, constraints, p, path)
+            run_parallel_tempering!(p, proposal, m, lattice, 5, 3,
+                                    PCG.PCGStateOneseq(UInt64, 8);
+                                    writers=w, seed=2024)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test ap["chain.run"] == "parallel tempering CycleWalk"
+            params = ap["chain.parameters"]
+            @test params["function"] == "run_parallel_tempering!"
+            @test params["betas"] == [0.0, 1/3, 2/3, 1.0]
+            @test params["n_rungs"] == 4
+            @test params["swap_interval"] == 5
+            @test params["n_rounds"] == 3
+            @test params["total_steps"] == 15
+            @test params["swap_scheme"] == "deterministic even/odd (non-reversible, DEO)"
+            @test params["backend"] == "serial"
+            @test params["workers"] == 1
+            @test params["init_steps"] == 0
+            @test params["write_rungs"] == "target"
+            @test params["output_every"] == 1
+            @test params["heat_bath"] === nothing
+            @test params["seed"] == 2024
+            @test params["weights.hot"]["get_log_spanning_forests"] == 0.0
+            @test params["weights.target"]["get_isoperimetric_score"] == 0.3
+            @test length(params["proposal"]) == 2
         end
     end
 

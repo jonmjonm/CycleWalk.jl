@@ -51,16 +51,16 @@ internal_walk = build_one_tree_cycle_walk(constraints)
 proposal = [(twocycle_frac, cycle_walk),
             (1.0-twocycle_frac, internal_walk)]
 
-## build target measure; the annealing schedule ramps both energy weights
-## linearly from 0 (the base measure) to their target values
+## build target measure; the annealing path ramps both energy weights linearly
+## from 0 (the base measure) to their target values — linear_path(target_w) is
+## exactly this, and is the driver's own default when no path is given, but is
+## built explicitly here to show the shape.
 measure = Measure()
 push_energy!(measure, get_log_spanning_forests, gamma)
 push_energy!(measure, get_isoperimetric_score, iso_weight)
 
-function modify_measure!(m::Measure, step::Int, total::Int)
-    m.weights[get_log_spanning_forests] = gamma*step/total
-    m.weights[get_isoperimetric_score] = iso_weight*step/total
-end
+scores, target_w = annealed_smc_scores_and_targets(measure)
+path = linear_path(target_w)
 
 ## establish output name and path
 atlasName = "ais_2cyclefrac_"*string(twocycle_frac)
@@ -81,9 +81,9 @@ push_writer!(writer, get_isoperimetric_scores)
 println("running AIS on ", ntasks, " task(s); outputting here: ",
         output_file_path)
 log_weights = run_annealed_importance_sampling!(
-    partition, proposal, measure, modify_measure!, total_steps,
+    partition, proposal, measure, total_steps,
     base_steps_per_sample, steps_per_annealing, rng;
-    writer=writer, ntasks=ntasks, seed=4541901234)
+    path=path, writer=writer, ntasks=ntasks, seed=4541901234)
 close_writer(writer) # close atlas
 
 ## summarize the log importance weights; subtract the max before

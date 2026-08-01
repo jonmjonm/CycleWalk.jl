@@ -178,7 +178,7 @@ open(joinpath(OUTDIR, "path_$(case)_reschedule.csv"), "w") do io
     for (uu, ff) in zip(ugrid, fofu); @printf(io, "%.4f,%.4f\n", uu, ff); end
 end
 println("wrote ", joinpath(OUTDIR, "path_$(case)_reschedule.csv"),
-        "  (load in run_case.jl to drive a non-linear modify_measure!)")
+        "  (load in run_case.jl to drive a non-linear AnnealPath)")
 
 # warp plot: recommended γ-fraction vs new (even) schedule position
 let W=620,H=460,L=60,R=20,T=44,B=56

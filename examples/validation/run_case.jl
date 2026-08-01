@@ -159,12 +159,10 @@ measure = Measure()
 push_energy!(measure, get_log_spanning_forests, gamma)
 use_iso && push_energy!(measure, get_isoperimetric_score, iso_weight)
 
-# linear anneal of the target's energy weights from 0 (base) to target
-function modify_measure!(m::Measure, step::Int, total::Int)
-    frac = step / total
-    m.weights[get_log_spanning_forests] = gamma * frac
-    use_iso && (m.weights[get_isoperimetric_score] = iso_weight * frac)
-end
+# linear anneal of the target's energy weights from 0 (base) to target — whichever
+# energies are actually in `measure` (get_isoperimetric_score only if use_iso)
+scores, target_w = annealed_smc_scores_and_targets(measure)
+path = linear_path(target_w)
 
 # ---------------------------------------------------------------------------
 # writer (per-district isoperimetric scores; Float64 weights only for AIS)
@@ -220,9 +218,9 @@ println("  -> $output_file_path")
 if mode == "ais"
     total_steps = n_samples * base_steps_per_sample
     log_weights = run_annealed_importance_sampling!(
-        partition, proposal, measure, modify_measure!, total_steps,
+        partition, proposal, measure, total_steps,
         base_steps_per_sample, steps_per_annealing, rng;
-        writer=writer, ntasks=ntasks)
+        path=path, writer=writer, ntasks=ntasks)
     close_writer(writer)
 
     println("collected ", length(log_weights), " AIS samples")

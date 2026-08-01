@@ -20,14 +20,15 @@ julia --project=. run_cyclewalk_toml.jl toml/param_grid4x4.toml
 | [`run_cyclewalk_extend.jl`](run_cyclewalk_extend.jl) | Adds samples to a finished Atlas, restarting from its last recorded plan and reading its config back out of its header. |
 | [`run_ais_ct.jl`](run_ais_ct.jl), [`run_ais_toml.jl`](run_ais_toml.jl) | Annealed importance sampling: a base chain plus an annealing pass per retained sample. The base chain is serial, so speedup is capped at `(base_steps_per_sample + steps_per_annealing) / base_steps_per_sample` however many threads you give it. |
 | [`run_asmc_toml.jl`](run_asmc_toml.jl) | Annealed sequential Monte Carlo: a particle population tempered from the base measure to the target. Give it `init_steps > 0` — required with `schedule = "adaptive"`, and without it the population starts as N identical clones. |
+| [`run_pt_toml.jl`](run_pt_toml.jl) | Parallel tempering: a ladder of replicas tempered from the base measure to the target, swapping adjacent rungs. `ThreadedBackend` spawns one task per rung, so give it `-t N` matching or exceeding `[pt] n_rungs` — see [`docs/run_pt_toml.md`](../docs/run_pt_toml.md) and [`docs/pt_profiling_notes.md`](../docs/pt_profiling_notes.md) for scaling data. |
 | [`parameterUtils.jl`](parameterUtils.jl), [`runtimeParameters.jl`](runtimeParameters.jl) | Included by the runners, not run directly: command-line parsing and every quantity derived from a config. |
 
 ## The directories
 
 | Directory | Contents |
 | --- | --- |
-| [`toml/`](toml) | Ready-to-run configurations: 4×4, 8×8 and 10×10 grids, a 10×10 hex lattice, Connecticut precincts, and the AIS/SMC configs. |
-| `data/` | The graphs those configs read (`ct/`, `grid/`, `hex/`). |
+| [`toml/`](toml) | Ready-to-run configurations: 4×4, 8×8 and 10×10 grids, a 10×10 hex lattice, Connecticut precincts, and the AIS/SMC/PT configs. |
+| `data/` | The graphs those configs read (`ct/`, `grid/`, `hex/`, `nc/`, `oh/`). |
 | `output/` | Where runs write their Atlas files, under the config's `outputDirectory`. |
 | [`validation/`](validation) | Cross-checks of the annealed samplers against a standard cycle walk; has its own README. |
 | `src-hold/` | Helpers for generating the sample grid graphs. |

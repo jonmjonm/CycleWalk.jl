@@ -14,6 +14,7 @@ using Hungarian
 import Combinatorics
 using Dates
 using AtlasIO
+using TOML
 using LinkCutTreesAugmented:
     Node,
     LinkCutTree,
@@ -142,12 +143,14 @@ export AbstractGraph,
     metropolis_hastings_run_metadata,
     annealed_importance_sampling_run_metadata,
     annealed_smc_run_metadata,
+    parallel_tempering_run_metadata,
 
     # energies/observables
     Measure,
     push_energy!,
     evaluate_weight_expression,
     weight_expression_parameters,
+    weight_path_closure,
     EnergySpec,
     energy_specs,
     measure_parameters,
@@ -157,6 +160,7 @@ export AbstractGraph,
     energy_weight_start,
     build_annealed_measure,
     build_measure,
+    build_path_measure,
     get_log_energy,
     get_log_spanning_trees,
     get_log_spanning_forests,
@@ -192,9 +196,20 @@ export AbstractGraph,
     run_chain!,
 
     # parallel tempering
-    # parallel_tempering!,
-    # parse_base_samples,
-    # parse_base_measure,
+    BetaLattice,
+    linear_betas,
+    geometric_betas,
+    HeatBath,
+    PTDiagnostics,
+    reset_pt_diagnostics!,
+    swap_rate,
+    run_parallel_tempering!,
+    SerialBackend,
+    ThreadedBackend,
+    # DistributedBackend,
+    parse_bath_measure,
+    parse_bath_samples,
+    try_heat_bath!,
 
     # cluster graph
     cluster_base_graph
@@ -263,8 +278,13 @@ include("./proposals/lifted_tree_cycle_walk.jl")
 include("./proposals/internal_forest_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
+include("./chains/anneal_path.jl")
 include("./chains/annealed_importance_sampling.jl")
 include("./chains/annealed_smc.jl")
+include("./chains/parallel_tempering_types.jl")
+include("./chains/pt_backends.jl")
+include("./chains/parallel_tempering.jl")
+include("./chains/pt_heat_bath.jl")
 include("./io/run_metadata.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")

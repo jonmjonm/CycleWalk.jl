@@ -38,6 +38,7 @@ struct EnergySpec
     name::String
     weight::Any
     weight_start::Any
+    weight_path::Union{String, Nothing}
     args::Vector{Any}
     kwargs::Dict{Symbol, Any}
     context::Vector{String}
@@ -46,11 +47,18 @@ end
 
 function EnergySpec(name::AbstractString; weight,
                     weight_start=nothing,
+                    weight_path::Union{AbstractString, Nothing}=nothing,
                     args::AbstractVector=Any[],
                     kwargs::AbstractDict=Dict{Symbol, Any}(),
                     context::AbstractVector=String[],
                     desc::AbstractString="")
-    return EnergySpec(String(name), weight, weight_start, collect(Any, args),
+    weight_start === nothing || weight_path === nothing ||
+        throw(ArgumentError("energy \"$name\" has both weight_start and " *
+                            "weight_path; they belong to different tempering modes " *
+                            "(\"linear\" vs \"path\") — use one or the other"))
+    return EnergySpec(String(name), weight, weight_start,
+                      weight_path === nothing ? nothing : String(weight_path),
+                      collect(Any, args),
                       Dict{Symbol, Any}(Symbol(k) => v for (k, v) in kwargs),
                       String[String(c) for c in context], String(desc))
 end
@@ -61,10 +69,19 @@ end
 The named parameters a weight expression may use: every numeric scalar in the config's
 `[measure]` table. `gamma` and `iso_weight` are therefore always available to an
 expression without being special-cased anywhere.
+
+`t` may not be one of them: it is reserved for `weight_path` expressions (the
+tempering fraction — see [`weight_path_closure`](@ref)), so a `[measure]` table that
+defines its own `t` is rejected here, before it could silently collide.
 """
 function measure_parameters(measure_config::AbstractDict)
-    return Dict{String, Any}(String(k) => v for (k, v) in measure_config
-                             if v isa Real && !(v isa Bool))
+    params = Dict{String, Any}(String(k) => v for (k, v) in measure_config
+                               if v isa Real && !(v isa Bool))
+    haskey(params, "t") &&
+        throw(ArgumentError("[measure] defines a parameter named \"t\", which is " *
+                            "reserved for weight_path expressions (the tempering " *
+                            "fraction); rename it"))
+    return params
 end
 
 """
@@ -123,8 +140,8 @@ function energy_specs(measure_config::AbstractDict)
     end
 end
 
-const _ENERGY_SPEC_KEYS = Set(["name", "weight", "weight_start", "args", "kwargs",
-                               "context", "desc"])
+const _ENERGY_SPEC_KEYS = Set(["name", "weight", "weight_start", "weight_path",
+                               "args", "kwargs", "context", "desc"])
 
 function _explicit_specs(entries)
     entries isa AbstractVector ||
@@ -146,9 +163,14 @@ function _explicit_specs(entries)
                 throw(ArgumentError("energy \"$name\" has unknown key \"$key\" " *
                                     "(expected: $(join(sort!(collect(_ENERGY_SPEC_KEYS)), ", ")))"))
         end
+        weight_path = get(entry, "weight_path", nothing)
+        weight_path === nothing || weight_path isa AbstractString ||
+            throw(ArgumentError("energy \"$name\"'s weight_path is " *
+                                "$(repr(weight_path)), not a string"))
         push!(specs, EnergySpec(name;
                                 weight       = entry["weight"],
                                 weight_start = get(entry, "weight_start", nothing),
+                                weight_path  = weight_path,
                                 args         = get(entry, "args", Any[]),
                                 kwargs       = get(entry, "kwargs", Dict{String, Any}()),
                                 context      = get(entry, "context", String[]),
@@ -340,6 +362,52 @@ function _build_measure(specs::AbstractVector{EnergySpec},
 end
 
 """
+    build_path_measure(specs, parameters; context=(;)) -> (measure, path)
+
+Build the target [`Measure`](@ref) as [`build_measure`](@ref) does, and alongside it
+an [`AnnealPath`](@ref) (a `LinearPath` — see its docs; "linear" names the
+energy-in-phi relationship, not the shape of this schedule) tempering it: for each
+spec with a `weight_path` expression, that expression (parsed and validated ONCE,
+here — see [`weight_path_closure`](@ref) — not re-parsed per round); for one without,
+a constant at its `weight` (present in the measure the whole run, untempered).
+
+Like [`build_annealed_measure`](@ref), a spec whose `weight` happens to be zero but
+that carries a `weight_path` is kept in the measure anyway (`allow_zero`) — the
+schedule may still make it nonzero at some `t`, and it must have a slot in `phi` for
+that to reach the sampler at all.
+
+`weight_path` and `weight_start` are mutually exclusive per spec ([`EnergySpec`](@ref)
+rejects both at once) — "linear" and "path" are different tempering modes for the
+whole run, not something mixed per energy.
+"""
+function build_path_measure(specs::AbstractVector{EnergySpec},
+                            parameters::AbstractDict;
+                            context=(;))
+    measure = Measure()
+    seen = Dict{Function, String}()
+    weight_fns = Dict{Function, Function}()   # energy -> (t::Float64 -> Float64)
+    for spec in specs
+        energy, label = resolve_energy_function(spec, context)
+        if haskey(seen, energy)
+            throw(ArgumentError("energies \"$(seen[energy])\" and \"$(spec.name)\" " *
+                                "are the same function; a measure can weight it once"))
+        end
+        seen[energy] = spec.name
+
+        weight = resolve_energy_weight(spec.weight, parameters, spec.name)
+        push_energy!(measure, energy, weight; desc=label,
+                    allow_zero=spec.weight_path !== nothing)
+        weight_fns[energy] = spec.weight_path === nothing ?
+            (_t -> weight) : weight_path_closure(spec.weight_path, parameters)
+    end
+    scores = Tuple(measure.scores)
+    K = length(scores)
+    fns = ntuple(k -> weight_fns[scores[k]], K)
+    path = LinearPath{K}(t -> ntuple(k -> fns[k](t), K))
+    return measure, path
+end
+
+"""
     build_measure(measure_config; context=(;)) -> Measure
 
 Build a [`Measure`](@ref) straight from a config's `[measure]` table, reading its
@@ -397,19 +465,24 @@ end
     referenced_parameters(specs) -> Vector{String}
 
 Every named parameter the measure described by `specs` actually reads, sorted and
-without repeats — the union over each spec's `weight` and `weight_start` of
-[`weight_expression_parameters`](@ref). A weight written as a plain number reads
-nothing and contributes no names.
+without repeats — the union over each spec's `weight`, `weight_start`, and
+`weight_path` of [`weight_expression_parameters`](@ref) (`weight_path`'s own `t` is
+excluded — it is the tempering fraction, not a run parameter, and is never part of a
+run's identity). A weight written as a plain number reads nothing and contributes no
+names.
 
 This is what a run must put in its output file name: a parameter no expression names
 cannot change the target, while one that is named must appear, or two runs differing
-only in it would compute the same path and the second would overwrite the first.
+only in it would compute the same path and the second would overwrite the first. A
+parameter referenced ONLY inside a `weight_path` expression still has to appear here,
+or two runs differing only in it would collide.
 """
 function referenced_parameters(specs::AbstractVector{EnergySpec})
     found = String[]
-    for spec in specs, value in (spec.weight, spec.weight_start)
+    for spec in specs, value in (spec.weight, spec.weight_start, spec.weight_path)
         value isa AbstractString || continue
         for name in weight_expression_parameters(value)
+            name == "t" && continue
             name in found || push!(found, name)
         end
     end

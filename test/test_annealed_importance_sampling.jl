@@ -25,10 +25,13 @@ using Test
     internal_walk = build_internal_forest_walk(constraints)
     proposal = [(0.5, cycle_walk), (0.5, internal_walk)]
 
-    # anneal the spanning-forest energy weight linearly from 0 to gamma
-    function anneal_forest_weight!(m::Measure, step::Int, total::Int)
-        m.weights[get_log_spanning_forests] = gamma*step/total
-    end
+    # anneal the spanning-forest energy weight linearly from 0 to gamma — reused
+    # (stateless/immutable, unlike FixedSchedule/AdaptiveTempering) across every
+    # test below that wants this exact schedule
+    anneal_forest_weight = linear_path((gamma,))
+    # a path whose weight never moves — the AnnealPath analogue of the old
+    # `(m,s,t)->nothing` modify_measure!
+    constant_forest_weight = LinearPath{1}(t -> (gamma,))
 
     @testset "constant schedule gives zero log weights" begin
         rng = PCG.PCGStateOneseq(UInt64, 1241909)
@@ -37,8 +40,8 @@ using Test
         measure = Measure()
         push_energy!(measure, get_log_spanning_forests, gamma)
         log_weights = run_annealed_importance_sampling!(
-            partition, proposal, measure, (m, s, t)->nothing,
-            40, 10, 5, rng)
+            partition, proposal, measure, 40, 10, 5, rng;
+            path=constant_forest_weight)
         @test length(log_weights) == 4
         @test all(log_weights .== 0.0)
     end
@@ -54,8 +57,8 @@ using Test
         # `partition` still holds after the run (annealing acts on a deep copy).
         # ν ∝ exp(−get_log_energy), so that is the NEGATIVE of the target log-energy.
         log_weights = run_annealed_importance_sampling!(
-            partition, proposal, measure, anneal_forest_weight!,
-            10, 10, 1, rng)
+            partition, proposal, measure, 10, 10, 1, rng;
+            path=anneal_forest_weight)
         @test length(log_weights) == 1
         expected = -get_log_energy(partition, measure)
         @test log_weights[1] ≈ expected
@@ -92,8 +95,7 @@ using Test
                         (0.9, build_internal_forest_walk(p88_constraints))]
         measure = Measure()
         push_energy!(measure, get_log_spanning_forests, 1.0)
-        ramp!(m, step, total) =
-            (m.weights[get_log_spanning_forests] = step / total)
+        path = linear_path((1.0,))
 
         rng = PCG.PCGStateOneseq(UInt64, 20260731)
         partition = LinkCutPartition(ais_graph, p88_constraints, 4; rng=rng)
@@ -104,8 +106,8 @@ using Test
                             weight_type=Float64)
             push_writer!(writer, get_cut_edge_sum)
             log_weights = run_annealed_importance_sampling!(
-                partition, p88_proposal, measure, ramp!,
-                120_000, 100, 400, rng; writer=writer)
+                partition, p88_proposal, measure,
+                120_000, 100, 400, rng; path=path, writer=writer)
             close_writer(writer)
 
             # logZ = log mean exp(log w)
@@ -150,8 +152,8 @@ using Test
         push_energy!(measure, get_log_spanning_forests, gamma)
         user_weight_before = measure.weights[get_log_spanning_forests]
         log_weights = run_annealed_importance_sampling!(
-            partition, proposal, measure, anneal_forest_weight!,
-            60, 20, 25, rng)
+            partition, proposal, measure, 60, 20, 25, rng;
+            path=anneal_forest_weight)
         @test length(log_weights) == 3
         @test all(isfinite.(log_weights))
         # the caller's measure must come through the run unmodified
@@ -171,8 +173,8 @@ using Test
                             weight_type=Float64)
             push_writer!(writer, get_log_spanning_forests)
             log_weights = run_annealed_importance_sampling!(
-                partition, proposal, measure, anneal_forest_weight!,
-                60, 20, 25, rng; writer=writer)
+                partition, proposal, measure, 60, 20, 25, rng;
+                path=anneal_forest_weight, writer=writer)
             close_writer(writer)
 
             io = AIO.smartOpen(output_path, "r")
@@ -199,8 +201,8 @@ using Test
                             weight_type=Float64)
             push_writer!(writer, get_log_spanning_forests)
             log_weights = run_annealed_importance_sampling!(
-                partition, proposal, measure, anneal_forest_weight!,
-                120, 15, 20, rng; writer=writer, ntasks=ntasks)
+                partition, proposal, measure, 120, 15, 20, rng;
+                path=anneal_forest_weight, writer=writer, ntasks=ntasks)
             close_writer(writer)
             io = AIO.smartOpen(output_path, "r")
             maps = AIO.nextMaps(AIO.openAtlas(io))
@@ -238,8 +240,8 @@ using Test
             push_path_writer!(writer, :delta_log_weight)
             push_path_writer!(writer, get_isoperimetric_score)
             log_weights = run_annealed_importance_sampling!(
-                partition, proposal, measure, anneal_forest_weight!,
-                60, 20, 30, rng; writer=writer, ntasks=2)
+                partition, proposal, measure, 60, 20, 30, rng;
+                path=anneal_forest_weight, writer=writer, ntasks=2)
             close_writer(writer)
 
             io = AIO.smartOpen(output_path, "r")
@@ -271,7 +273,7 @@ using Test
             push_writer!(writer, get_log_spanning_forests)
             record && push_path_writer!(writer, :log_weight)
             lw = run_annealed_importance_sampling!(partition, proposal, measure,
-                     anneal_forest_weight!, 60, 20, 25, rng; writer=writer)
+                     60, 20, 25, rng; path=anneal_forest_weight, writer=writer)
             close_writer(writer)
             io = AIO.smartOpen(path, "r")
             maps = AIO.nextMaps(AIO.openAtlas(io)); close(io)
