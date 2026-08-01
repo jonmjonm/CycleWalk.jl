@@ -220,27 +220,94 @@ mechanics, heat bath, backend dispatch) showed up as a hotspot; PT just runs thi
 same per-step cost M times per round, making it more visible in aggregate without
 being its cause.
 
-Not yet acted on — noted here for later, since fixing either touches the energy
-functions that define the MCMC's stationary distribution and would need
-`test/pt_backend_equivalence_check.jl`-style validation, not just a speed check:
+Status of the three follow-ups identified here:
 
-1. `set_areas_and_perimeters!` (`src/measure/energy/polsby_popper.jl`, ~line 118)
-   rebuilds a changed district's node list with a full O(N) scan over *every* node
-   in the graph (`[ii for ii = 1:graph.num_nodes if node_to_dist[ii]==di]`), every
-   step, even though a typical move only changes membership for a handful of
-   nodes. Likely why `oh`'s `array.jl:991 _setindex!` self-time scaled ~11x over
-   `ct`'s (~12x node-count ratio) — an O(N) cost that should be O(moved nodes).
-2. `get_log_spanning_trees`'s dense Cholesky (`potrf!`) is a deliberate choice
-   (see the docstring) to dodge sparse-Laplacian allocation overhead — a
-   defensible call at ct-sized districts (~120 nodes) but worth re-benchmarking
-   against a sparse solver (CHOLMOD, already reachable via `SparseArrays`) at
-   oh/hex50-sized districts (~500 nodes), where dense O(m³) cost is much larger.
-   Needs an actual A/B measurement — sparse solvers carry symbolic-factorization
-   overhead that could still lose at this size.
-3. Lower-risk: `get_log_spanning_trees` allocates a fresh `m×m` dense matrix on
-   every call; reusing a scratch buffer (cached per-replica, like
-   `LogForestEnergyData` already caches the tree counts themselves) would cut
-   allocation pressure without touching the algorithm.
+1. `set_areas_and_perimeters!`'s O(N) full-graph scan per changed district —
+   **attempted twice on `perf/cholesky-sparse-vs-dense`, both reverted.** A
+   link-cut-tree walk (visiting only a district's own nodes, `O(|di|)` instead of
+   `O(N)`) came out a wash to slightly worse in direct timing on `oh` (2,073-2,098
+   before vs. 1,887-2,034 steps/s after) — the walk's pointer-chasing overhead
+   (`expose!`, growing a `Vector` via `push!`/`pop!`) ate the savings from visiting
+   fewer nodes; a plain sequential array scan is too cache-friendly to beat that
+   way. A combined single pass (all changed districts in one O(N) scan instead of
+   one O(N) scan per changed district) was also a wash (2,084-2,111 steps/s) —
+   *why*, in hindsight: `potrf!` alone was ~35% of real profiler samples on `oh` at
+   the time, so even fully eliminating this scan's redundancy only touched a small
+   slice of total cost. **Worth re-benchmarking now** (not yet done): with the
+   Cholesky fix below in place, `set_areas_and_perimeters!` accounts for ~11% of
+   real work on `nc`'s profile (comparable to `potrf!` alone) — a fix that was
+   noise-level against the old baseline might be measurable against the new one.
+2. `get_log_spanning_trees`'s dense-vs-sparse Cholesky — **done, see below.**
+3. Reusing a scratch buffer for `get_log_spanning_trees`'s per-call `m×m`
+   allocation — still open, lower priority than (1) now.
+
+## Dense vs. sparse Cholesky for `get_log_spanning_trees` (done)
+
+Benchmarked before implementing anything (full plan at the top of this repo's
+`perf/cholesky-sparse-vs-dense` branch history): dense `cholesky!` (current code)
+vs. `SparseArrays`'s CHOLMOD `cholesky` (no new dependency — already reachable),
+timing assembly *and* factorization together (not factorization alone, which
+undercounts sparse's extra assembly cost), with `BLAS.set_num_threads(1)` matching
+how `run_parallel_tempering!` actually runs it. Real induced-subgraph data, not
+synthetic random sparse matrices — three different connectivity structures (6-
+neighbor hex, 4-neighbor grid, irregular real precinct adjacency: ct/nc/oh) —
+**all agree on a crossover around district size m≈150-190**:
+
+| graph | avg district size (m) | sparse/dense ratio |
+|---|---|---|
+| grid10 | ~32 | 4.14x **slower** |
+| hex10 | ~20 | 1.79x slower |
+| hex20 | ~80 | 1.72x slower |
+| ct | ~120-146 | 1.27x slower |
+| nc | ~189 avg (125-286 range) | 1.33x **faster** |
+| hex30 | ~180 | 1.77x faster |
+| grid30 | ~300 | 2.02x faster |
+| hex40 | ~320 | 1.94x faster |
+| oh | ~350-594 | 3.40x faster |
+| hex50 | ~499 | 3.98x faster |
+| grid50 | ~830 | 9.20x faster |
+
+Also checked within a single real map (`oh` at 8/15/25 districts, isolating
+district-count from graph identity): 924 avg → 0.135 ratio, 493 avg → 0.302, 295
+avg (range down to 120) → 0.538 — same trend, confirming it isn't an artifact of
+comparing different maps. (`oh` at 40 districts failed to construct — a population-
+balance infeasibility at that district count/seed, unrelated to this question.)
+
+**Implemented** as `DENSE_CHOLESKY_MAX_M = 160` in
+`src/measure/energy/log_forest_count.jl`: a plain `if m < DENSE_CHOLESKY_MAX_M`
+inside `get_log_spanning_trees`, checked fresh on *every call* using that call's
+own `m` — not decided once for the whole graph/run. Two reasons that matters: the
+check itself is a single comparison against a value already being computed, so
+there's no cost to save by deciding it "in advance"; and district sizes drift
+across a run (nodes move between districts on accepted moves) and vary a lot
+*within* one map (nc: 125-286 nodes), so a cached decision could go stale as a
+district's size crosses the threshold mid-run.
+
+**Correctness**: full suite passes (164/164 PT tests, including "ThreadedBackend
+reproduces SerialBackend bitwise"). Added `test/test_log_forest_count.jl`: both
+branches checked against an independent reference (`Graphs.jl`'s own
+`induced_subgraph` + dense `logdet` — a different code path from CycleWalk's
+hand-rolled kernel) on both a connected and a disconnected district, on both sides
+of the threshold.
+
+**Real measured win** (serial backend, same 80,000-step workload used
+throughout this document, before/after via `git stash`):
+
+| graph | before | after | speedup |
+|---|---|---|---|
+| oh | 2,133 steps/s | 3,448 steps/s | **1.62x** |
+| hex50 | 3,183 | 5,284 | **1.66x** |
+| nc | 7,467 | 8,484 | **1.14x** (mixed — only districts ≥160 nodes cross over) |
+| ct | 12,878 | 12,751 | 0.99x (no regression — every ct district stays on the dense path, as it should) |
+
+Hotspot profile confirms the mechanism directly: `potrf!` (dense LAPACK)
+disappears *entirely* from `oh`'s profile post-fix (its smallest district is 260
+nodes, comfortably above the threshold) — replaced by cheaper CHOLMOD calls, and
+total real (non-idle) profiler samples for the same workload dropped from ~39,000
+to ~22,500. `nc`'s profile (mixed district sizes straddling the threshold) shows
+`potrf!` **and** CHOLMOD together in the same run, at comparable magnitude to each
+other — direct confirmation the per-call dispatch is splitting work correctly
+within one run, not just switching wholesale between maps.
 
 ## Design implication for task 9 (Distributed backend)
 

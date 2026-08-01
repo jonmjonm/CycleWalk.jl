@@ -9,7 +9,7 @@ using DataStructures:
 using Graphs
 using RandomNumbers
 using LinearAlgebra
-using SparseArrays: rowvals, nonzeros, nzrange
+using SparseArrays: rowvals, nonzeros, nzrange, sparse
 using Hungarian
 import Combinatorics
 using Dates
