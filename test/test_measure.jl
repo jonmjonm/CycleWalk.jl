@@ -384,6 +384,102 @@ end
         @test isempty(energy_specs(Dict{String, Any}()))
         @test isempty(build_measure(Dict{String, Any}()).scores)
     end
+
+    @testset "t is reserved for weight_path expressions" begin
+        @test_throws ArgumentError measure_parameters(
+            Dict{String, Any}("t" => 0.5, "gamma" => 1.0))
+        # only a numeric "t" collides; a non-numeric one is dropped like any other
+        # non-numeric key and never reaches the reserved-name check
+        @test !haskey(measure_parameters(Dict{String, Any}("t" => "text")), "t")
+    end
+
+    @testset "weight_path and weight_start are mutually exclusive per energy" begin
+        cfg = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => 1.0,
+            "weight_start" => 0.0, "weight_path" => "t")])
+        @test_throws ArgumentError energy_specs(cfg)
+
+        # weight_path must be a string
+        bad_type = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => 1.0,
+            "weight_path" => 2.0)])
+        @test_throws ArgumentError energy_specs(bad_type)
+
+        # weight_path alone (no weight_start) is fine
+        ok = Dict{String, Any}("gamma" => 1.0, "energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => "gamma",
+            "weight_path" => "gamma*t")])
+        specs = energy_specs(ok)
+        @test specs[1].weight_path == "gamma*t"
+        @test specs[1].weight_start === nothing
+    end
+
+    @testset "build_path_measure: measure + tempering path" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 1.0, "iso_weight" => 0.3,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma", "weight_path" => "gamma*t"),
+                Dict{String, Any}("name" => "get_isoperimetric_score",
+                                  "weight" => "iso_weight")])   # no weight_path
+        specs = energy_specs(cfg)
+        pars = measure_parameters(cfg)
+        measure, path = build_path_measure(specs, pars)
+
+        # the measure itself is built from `weight` exactly like build_measure
+        @test measure.weights[get_log_spanning_forests] == 1.0
+        @test measure.weights[get_isoperimetric_score] == 0.3
+
+        scores, _ = annealed_smc_scores_and_targets(measure)
+        @test Set(scores) == measure.scores
+
+        # the tempered energy follows its weight_path...
+        w0 = CycleWalk.weights_at(path, 0.0)
+        w1 = CycleWalk.weights_at(path, 1.0)
+        gamma_idx = findfirst(==(get_log_spanning_forests), scores)
+        iso_idx   = findfirst(==(get_isoperimetric_score), scores)
+        @test w0[gamma_idx] == 0.0
+        @test w1[gamma_idx] == 1.0
+        # ...and the untempered energy holds constant at its weight throughout
+        @test w0[iso_idx] == 0.3
+        @test w1[iso_idx] == 0.3
+        @test CycleWalk.weights_at(path, 0.37)[iso_idx] == 0.3
+    end
+
+    @testset "build_path_measure: a zero-weight energy with a weight_path is kept" begin
+        # mirrors build_annealed_measure's allow_zero rule for weight_start: a
+        # weight_path may make an energy nonzero at some t even if its registered
+        # `weight` happens to be 0, so it must not be dropped from the measure
+        cfg = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => 0.0,
+            "weight_path" => "1 - t")])
+        measure, path = build_path_measure(energy_specs(cfg), measure_parameters(cfg))
+        @test get_log_spanning_forests in measure.scores
+        @test keys(measure.weights) == measure.scores
+        scores, _ = annealed_smc_scores_and_targets(measure)
+        @test CycleWalk.weights_at(path, 0.0)[1] == 1.0
+        @test CycleWalk.weights_at(path, 1.0)[1] == 0.0
+    end
+
+    @testset "referenced_parameters scans weight_path, excluding t" begin
+        cfg = Dict{String, Any}(
+            "gamma" => 1.0, "mcd_weight" => 2.0,
+            "energy" => [
+                Dict{String, Any}("name" => "get_log_spanning_forests",
+                                  "weight" => "gamma", "weight_path" => "gamma*t"),
+                Dict{String, Any}("name" => "get_log_district_trees",
+                                  "weight" => 0.0,
+                                  "weight_path" => "mcd_weight*(1-t)")])
+        # mcd_weight is referenced ONLY inside weight_path — must still be tagged,
+        # or two runs differing only in it would collide on one output path
+        @test referenced_parameters(energy_specs(cfg)) == ["gamma", "mcd_weight"]
+
+        # t itself is never a run parameter and must never appear
+        t_only = Dict{String, Any}("energy" => [Dict{String, Any}(
+            "name" => "get_log_spanning_forests", "weight" => 1.0,
+            "weight_path" => "t")])
+        @test referenced_parameters(energy_specs(t_only)) == String[]
+    end
 end
 
 # A callable the expression tests can watch: if the evaluator ever invokes a function
@@ -568,5 +664,53 @@ bump_probe(args...) = (EXPRESSION_PROBE[] += 1; 1.0)
 
         wide = join(fill("gamma", 200), "+")     # node count
         @test_throws ArgumentError evaluate_weight_expression(wide, knobs)
+    end
+
+    @testset "weight_path_closure: parse once, evaluate against t" begin
+        f = weight_path_closure("gamma*t", knobs)
+        @test f isa Function
+        @test f(0.0) == 0.0
+        @test f(0.5) == 0.75
+        @test f(1.0) == 1.5
+
+        g = weight_path_closure("iso_weight*t^2 + 1", knobs)
+        @test g(0.0) == 1.0
+        @test g(2.0) == 1.0 + 0.4*4
+
+        # a path that is nonzero at t=0 and fades out — not a monotone 0->target
+        # ramp, and that's fine: the grammar has no notion of "target" at all
+        h = weight_path_closure("gamma*(1-t)", knobs)
+        @test h(0.0) == 1.5
+        @test h(1.0) == 0.0
+
+        # constant (no t) is legal — an energy that doesn't move
+        c = weight_path_closure("gamma", knobs)
+        @test c(0.0) == c(0.5) == c(1.0) == 1.5
+    end
+
+    @testset "weight_path_closure validates once, at construction" begin
+        # unknown name fails immediately, not on first use
+        err = try weight_path_closure("not_a_parameter*t", knobs); nothing
+              catch e; e end
+        @test err isa ArgumentError
+        @test occursin("not_a_parameter", err.msg)
+
+        # bad syntax, same
+        @test_throws ArgumentError weight_path_closure("2*", knobs)
+
+        # non-arithmetic is refused exactly as evaluate_weight_expression refuses it
+        @test_throws ArgumentError weight_path_closure("sqrt(t)", knobs)
+        @test_throws ArgumentError weight_path_closure("run(`ls`)", knobs)
+    end
+
+    @testset "weight_path_closure surfaces a bad value at the t that produces it" begin
+        # 1/t is fine near t=1 but blows up at t=0; construction (validated at a
+        # dummy t=0.0) must therefore fail up front for THIS expression...
+        @test_throws ArgumentError weight_path_closure("1/t", knobs)
+        # ...but an expression that is finite at t=0 and only misbehaves elsewhere
+        # is caught when that t is actually evaluated, not silently
+        f = weight_path_closure("1/(1-t)", knobs)
+        @test f(0.0) == 1.0
+        @test_throws ArgumentError f(1.0)
     end
 end
