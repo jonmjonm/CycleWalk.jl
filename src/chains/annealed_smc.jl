@@ -15,6 +15,16 @@
 # variants is `next_t`. Everything else — potentials, weights, ESS, resampling,
 # rejuvenation, logZ — is shared.
 #
+# SIGN CONVENTION: `get_log_energy` (and therefore `energy_at` below) returns an
+# ENERGY, not a log-density. The target is ν(τ) ∝ exp(−E(τ,t)) — see `get_delta_energy`,
+# and §6 of the Cycle Walk paper, which defines ν_γ(τ) ∝ π(ξ_τ)/Tree(ξ_τ)^γ ∝
+# exp(−γ·J_Tree − J) with that exponent being exactly what `get_log_energy` sums. So
+# every incremental log-weight is E(t_prev) − E(t), NOT E(t) − E(t_prev). Inverting it
+# makes the sampler estimate Z_base/Z_target, and — because the weights also drive
+# resampling here — degrades the particle population itself, so it cannot be repaired
+# by negating logZ afterwards. `test_annealed_smc.jl` pins the sign against the exactly
+# known log Z(1)/Z(0) = log(117/654) on the 4×4 test graph.
+#
 # Potentials: each particle caches φ = (energy_1(state), …, energy_K(state)), the
 # PATH-INDEPENDENT raw per-term energies, as an NTuple{K} (isbits, no heap alloc).
 # Reading them is cheap: get_log_spanning_forests / get_isoperimetric_score read
@@ -103,7 +113,7 @@ function next_t(sched::AdaptiveTempering, particles, path, t_prev)
     trial_ess = function (t)
         for i in 1:N
             p = particles[i]
-            buf[i] = p.logW + energy_at(path, p, t) - energy_at(path, p, t_prev)
+            buf[i] = p.logW + energy_at(path, p, t_prev) - energy_at(path, p, t)
         end
         return ess_from_logw(buf)
     end
@@ -183,6 +193,10 @@ linear_path(target_w::NTuple{K,Float64}) where {K} =
 Log-energy of `particle.state` under the measure at schedule point `t`. All
 incremental-weight and adaptive-ESS math goes through this. `LinearPath` reads the
 cached potentials (`⟨weights(t), phi⟩`) — arithmetic only.
+
+This is an ENERGY: the density at `t` is `ν_t ∝ exp(−energy_at(path, p, t))`. Callers
+forming a log-density ratio therefore want `energy_at(t_prev) − energy_at(t)` (see this
+file's header).
 """
 @inline energy_at(path::LinearPath, p::Particle, t::Float64) =
     _dot(weights_at(path, t), p.phi)
@@ -242,14 +256,16 @@ end
 """
     incremental_logweight!(particles, path, t_prev, t)
 
-Add the SMC incremental log-weight `energy_at(t) − energy_at(t_prev)` to each
-particle (at its PRE-move state, before rejuvenation). Generic form routes through
-the [`energy_at`](@ref) seam, so it is correct for any `AnnealPath`.
+Add the SMC incremental log-weight `log[ν_t(x)/ν_{t_prev}(x)]` to each particle (at its
+PRE-move state, before rejuvenation). Since `energy_at` returns an ENERGY and
+`ν ∝ exp(−E)` (see this file's header), that increment is
+`energy_at(t_prev) − energy_at(t)` — note the order. Generic form routes through the
+[`energy_at`](@ref) seam, so it is correct for any `AnnealPath`.
 """
 function incremental_logweight!(particles::Vector{Particle{K}}, path::AnnealPath,
                                 t_prev::Float64, t::Float64) where {K}
     for p in particles
-        p.logW += energy_at(path, p, t) - energy_at(path, p, t_prev)
+        p.logW += energy_at(path, p, t_prev) - energy_at(path, p, t)
     end
 end
 
@@ -257,7 +273,7 @@ end
 # compute Δw once and dot it against each cached phi (avoids per-particle weights_at).
 function incremental_logweight!(particles::Vector{Particle{K}}, path::LinearPath,
                                 t_prev::Float64, t::Float64) where {K}
-    dw = _sub(weights_at(path, t), weights_at(path, t_prev))
+    dw = _sub(weights_at(path, t_prev), weights_at(path, t))
     for p in particles
         p.logW += _dot(dw, p.phi)
     end

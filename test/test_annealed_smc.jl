@@ -113,19 +113,43 @@ using Test
         @test CycleWalk.energy_at(path, p, 0.0) ≈ 0.0
     end
 
-    @testset "incremental_logweight! matches the energy_at seam" begin
+    @testset "incremental_logweight! is the log-density ratio (sign)" begin
+        # The SMC increment is log[ν_t(x)/ν_{t_prev}(x)]. `energy_at` returns an
+        # ENERGY and ν ∝ exp(−E), so the increment is E(t_prev) − E(t). Asserting it
+        # against `energy_at(t) - energy_at(t_prev)` (as this test previously did)
+        # merely restates the implementation and cannot catch a flipped sign.
         target_w = (gamma, iso)
         path = CycleWalk.linear_path(target_w)
         st = fresh_partition(404)
         phis = [(1.0, 0.5), (-2.0, 3.0), (0.25, -0.75)]
-        parts = [CycleWalk.Particle{2}(CycleWalk.clone_for_annealing(st), 0.0,
-                                       phi, PCG.PCGStateOneseq(UInt64, UInt64(i)))
-                 for (i, phi) in enumerate(phis)]
+        mkparts() = [CycleWalk.Particle{2}(CycleWalk.clone_for_annealing(st), 0.0,
+                                           phi, PCG.PCGStateOneseq(UInt64, UInt64(i)))
+                     for (i, phi) in enumerate(phis)]
         t_prev, t = 0.2, 0.7
-        expected = [CycleWalk.energy_at(path, p, t) -
-                    CycleWalk.energy_at(path, p, t_prev) for p in parts]
+
+        parts = mkparts()
+        expected = [CycleWalk.energy_at(path, p, t_prev) -
+                    CycleWalk.energy_at(path, p, t) for p in parts]
         CycleWalk.incremental_logweight!(parts, path, t_prev, t)
         @test [p.logW for p in parts] ≈ expected
+
+        # Independent derivation from the definition, not from `energy_at`: for a
+        # linear path the increment is ⟨w(t_prev) − w(t), φ⟩ = (t_prev − t)·⟨w_target, φ⟩.
+        @test [p.logW for p in parts] ≈
+              [(t_prev - t) * (target_w[1]*phi[1] + target_w[2]*phi[2]) for phi in phis]
+
+        # The generic AnnealPath method and the LinearPath fast path must agree; a
+        # sign error in only one of the two would otherwise slip through.
+        generic = mkparts()
+        invoke(CycleWalk.incremental_logweight!,
+               Tuple{Vector{CycleWalk.Particle{2}}, CycleWalk.AnnealPath,
+                     Float64, Float64},
+               generic, path, t_prev, t)
+        @test [p.logW for p in generic] ≈ [p.logW for p in parts]
+
+        # Direction: a particle with positive energy is penalised as t grows, so its
+        # weight must fall. (phis[1] is positive in both coordinates.)
+        @test parts[1].logW < 0
     end
 
     @testset "annealed_smc_scores_and_targets round-trips a measure" begin
@@ -191,8 +215,9 @@ using Test
     @testset "deterministic logZ accounting (no rejuvenation, no resampling)" begin
         # With rejuv_steps=0 and init_steps=0 every particle is a frozen clone of
         # the initial partition, so phi never changes and the incremental weights
-        # telescope: each particle's final logW == <target_w, phi> == the target
-        # log-energy, and logZ == that same value. ess_frac=0 disables resampling.
+        # telescope: each particle's final logW == −<target_w, phi> == MINUS the
+        # target log-energy (ν ∝ exp(−E)), and logZ == that same value. ess_frac=0
+        # disables resampling.
         partition = fresh_partition(606)
         measure = make_measure()
         rng = PCG.PCGStateOneseq(UInt64, 606)
@@ -200,12 +225,52 @@ using Test
         particles, logZ, trace = run_annealed_smc!(
             partition, proposal, measure, sched, 8, 0, rng; init_steps=0)
 
-        expected = get_log_energy(partition, measure)
+        expected = -get_log_energy(partition, measure)
         @test logZ ≈ expected
         @test all(p -> isapprox(p.logW, expected), particles)
         @test length(particles) == 8
         @test trace[end].t ≈ 1.0
         @test !any(r -> r.resampled, trace)
+    end
+
+    # ------------------------------------------------------------------------
+    # Sign / correctness regression -- see the matching block in
+    # test_annealed_importance_sampling.jl for the derivation of the exact answer.
+    # Annealing gamma from 0 to 1 on the 4x4 graph must give
+    #     logZ = log(Z(1)/Z(0)) = log(117/654) = -1.72093.
+    #
+    # This matters more for ASMC than for AIS: the log weights also drive resampling
+    # and the ESS test, so an inverted sign kills the wrong particles and corrupts
+    # the population itself -- it cannot be repaired by negating logZ afterwards.
+    # Measured spread over 5 seeds is <= 0.09; a flipped sign lands ~3.6 away.
+    # ------------------------------------------------------------------------
+    @testset "logZ matches the exactly known log Z(1)/Z(0)" begin
+        exact_logZ = log(117 / 654)
+
+        # the hard p88 population constraint (min=max=4) the enumeration assumes
+        p88_constraints = initialize_constraints()
+        add_constraint!(p88_constraints, PopulationConstraint(4, 4))
+        p88_proposal = [(0.1, build_lifted_tree_cycle_walk(p88_constraints)),
+                        (0.9, build_internal_forest_walk(p88_constraints))]
+
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, 1.0)
+        scores, target_w = annealed_smc_scores_and_targets(measure)
+        K = length(scores)
+        path = LinearPath{K}(t -> ntuple(k -> t * target_w[k], K))
+
+        rng = PCG.PCGStateOneseq(UInt64, 20260731)
+        partition = LinkCutPartition(annealed_smc_graph, p88_constraints, 4; rng=rng)
+        sched = FixedSchedule(range(0, 1; length=41); ess_frac=0.5)
+        _, logZ, trace = run_annealed_smc!(partition, p88_proposal, measure, sched,
+                                           64, 200, rng; path=path, init_steps=1000)
+
+        @test logZ ≈ exact_logZ atol = 0.5
+        # Z(1) < Z(0): the estimate must be negative regardless of tolerance.
+        @test logZ < 0
+        # the population must not have collapsed -- if it did, the logZ agreement
+        # above would be luck rather than a working sampler
+        @test minimum(rc.ess for rc in trace) > 2.0
     end
 
     @testset "zero path => zero weights and logZ == 0" begin

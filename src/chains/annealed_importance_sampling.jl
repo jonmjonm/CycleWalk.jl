@@ -4,8 +4,17 @@
 
 Pre-step hook for annealed importance sampling. Advance `measure` one annealing
 step via `modify_measure!(measure, cur_step, total_steps)` and accumulate the log
-importance weight in place: `weight.value` gains the change in the log-energy of
-the current `partition` under the measure before vs. after the modification.
+importance weight in place.
+
+The increment is `log[ν_new(τ)/ν_old(τ)]`, the log-density ratio of the current
+`partition` under the measure after vs. before the modification. `get_log_energy`
+returns an *energy*, not a log-density — the target is `ν(τ) ∝ exp(−get_log_energy)`
+(see `get_delta_energy`, and §6 of the Cycle Walk paper, which defines
+`ν_γ(τ) ∝ π(ξ_τ)/Tree(ξ_τ)^γ ∝ exp(−γ·J_Tree − J)` with that exponent being exactly what
+`get_log_energy` sums). So the increment is `e1 - e2`, the NEGATIVE of the change in
+energy. Getting this backwards makes AIS estimate `Z_base/Z_target` instead of
+`Z_target/Z_base`; `test_annealed_importance_sampling.jl` pins it against the exactly
+known `log Z(1)/Z(0) = log(117/654)` on the 4×4 test graph.
 """
 function track_weight_and_modify_measure!(
     cur_step::Int,
@@ -18,7 +27,7 @@ function track_weight_and_modify_measure!(
     e1 = get_log_energy(partition, measure)
     modify_measure!(measure, cur_step, total_steps)
     e2 = get_log_energy(partition, measure)
-    weight.value += e2 - e1
+    weight.value += e1 - e2      # log[ν_new/ν_old]; ν ∝ exp(−energy), so NOT e2 - e1
 end
 
 """
@@ -46,7 +55,7 @@ function track_weight_record_path!(
     e1 = get_log_energy(partition, measure)
     modify_measure!(measure, cur_step, total_steps)
     e2 = get_log_energy(partition, measure)
-    delta = e2 - e1
+    delta = e1 - e2              # see track_weight_and_modify_measure! on the sign
     weight.value += delta
     if cur_step % stride == 0 || cur_step == total_steps
         for r in recorders

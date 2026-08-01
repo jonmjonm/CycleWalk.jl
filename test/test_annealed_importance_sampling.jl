@@ -49,16 +49,97 @@ using Test
                                      rng=rng)
         measure = Measure()
         push_energy!(measure, get_log_spanning_forests, gamma)
-        # one outer sample, one annealing step: the base measure has weight 0,
-        # so the log weight is exactly the target log-energy of the base-chain
-        # state, which `partition` still holds after the run (annealing acts
-        # on a deep copy)
+        # one outer sample, one annealing step: the base measure has weight 0, so the
+        # log weight is exactly log[ν_target/ν_base] at the base-chain state, which
+        # `partition` still holds after the run (annealing acts on a deep copy).
+        # ν ∝ exp(−get_log_energy), so that is the NEGATIVE of the target log-energy.
         log_weights = run_annealed_importance_sampling!(
             partition, proposal, measure, anneal_forest_weight!,
             10, 10, 1, rng)
         @test length(log_weights) == 1
-        expected = get_log_energy(partition, measure)
+        expected = -get_log_energy(partition, measure)
         @test log_weights[1] ≈ expected
+        # direction: raising γ from 0 penalises this state (positive energy), so the
+        # importance weight must be < 1, i.e. log weight < 0
+        @test log_weights[1] < 0
+    end
+
+    # ------------------------------------------------------------------------
+    # Sign / correctness regression. AIS and ASMC accumulated their log weights
+    # with the sign of the ENERGY rather than of the log-density, which made both
+    # estimate Z_base/Z_target. Nothing caught it: every existing assertion either
+    # restated the implementation or used a zero/constant schedule where the sign
+    # is invisible. These tests pin the estimator to an exactly known answer.
+    #
+    # On the 4x4 test graph with PopulationConstraint(4,4) the partition function
+    # of pi_gamma(xi) ∝ Tree(xi)^(1-gamma) is enumerated in
+    # test/test_cases/small_square_p88_unweighted.jl:
+    #     Z(0) = 256 + 224 + 96 + 78 = 654      (gamma = 0)
+    #     Z(1) =   1 +  14 + 24 + 78 = 117      (gamma = 1)
+    # so annealing gamma from 0 to 1 must give log(Z(1)/Z(0)) = log(117/654).
+    # The measured spread over 5 seeds is <= 0.15; a flipped sign lands ~4.1 away,
+    # so atol=0.5 separates the two by a factor of ~8 without being flaky.
+    # ------------------------------------------------------------------------
+    @testset "logZ matches the exactly known log Z(1)/Z(0)" begin
+        AIO = CycleWalk.AtlasIO
+        exact_logZ = log(117 / 654)
+
+        # gamma=1 target, and the p88 hard population constraint (min=max=4) that the
+        # enumeration assumes -- NOT the pop_dev=0.1 constraint used elsewhere here.
+        p88_constraints = initialize_constraints()
+        add_constraint!(p88_constraints, PopulationConstraint(4, 4))
+        p88_proposal = [(0.1, build_lifted_tree_cycle_walk(p88_constraints)),
+                        (0.9, build_internal_forest_walk(p88_constraints))]
+        measure = Measure()
+        push_energy!(measure, get_log_spanning_forests, 1.0)
+        ramp!(m, step, total) =
+            (m.weights[get_log_spanning_forests] = step / total)
+
+        rng = PCG.PCGStateOneseq(UInt64, 20260731)
+        partition = LinkCutPartition(ais_graph, p88_constraints, 4; rng=rng)
+
+        mktempdir() do tmpdir
+            output_path = joinpath(tmpdir, "ais_logz.jsonl.gz")
+            writer = Writer(measure, p88_constraints, partition, output_path;
+                            weight_type=Float64)
+            push_writer!(writer, get_cut_edge_sum)
+            log_weights = run_annealed_importance_sampling!(
+                partition, p88_proposal, measure, ramp!,
+                120_000, 100, 400, rng; writer=writer)
+            close_writer(writer)
+
+            # logZ = log mean exp(log w)
+            mx = maximum(log_weights)
+            logZ = mx + log(sum(x -> exp(x - mx), log_weights)) - log(length(log_weights))
+            @test logZ ≈ exact_logZ atol = 0.5
+            # Z(1) < Z(0), so the estimate must be negative. This alone catches the
+            # sign flip, independent of how tight the tolerance is.
+            @test logZ < 0
+
+            # Stronger than logZ: the weights must reweight the gamma=0 samples into
+            # the gamma=1 distribution. Compare the weighted cut-edge histogram with
+            # the enumerated one. (logZ is an average and could in principle be right
+            # while individual weights were not.)
+            io = AIO.smartOpen(output_path, "r")
+            atlas = AIO.openAtlas(io)
+            maps = AIO.nextMaps(atlas)
+            close(io)
+            @test length(maps) == length(log_weights)
+
+            w = exp.(log_weights .- mx)
+            acc = Dict{Int, Float64}()
+            for (m, wi) in zip(maps, w)
+                ce = Int(m.data["get_cut_edge_sum"])
+                acc[ce] = get(acc, ce, 0.0) + wi
+            end
+            tot = sum(values(acc))
+            truth = Dict(8 => 1/117, 10 => 14/117, 11 => 24/117, 12 => 78/117)
+            @test Set(keys(acc)) == Set(keys(truth))
+            # L1 distance between the reweighted and enumerated distributions.
+            # Measured ~0.04 when correct; the sign flip gives ~0.5.
+            l1 = sum(abs(acc[k]/tot - truth[k]) for k in keys(truth))
+            @test l1 < 0.15
+        end
     end
 
     @testset "multi-step annealing runs and returns finite weights" begin
