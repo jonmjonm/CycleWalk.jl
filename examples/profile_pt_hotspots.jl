@@ -1,14 +1,20 @@
-# Threaded-backend scaling profile for parallel tempering.
+# Serial hotspot profile for parallel tempering, via Julia's stdlib sampling
+# profiler (`Profile`) — where the time goes within a PT round, not how fast it
+# scales with threads (see profile_pt_threaded.jl for that).
 #
-#   julia --project=<examples-dir> -t N profile_pt_threaded.jl [backend] [graph] [M]
+#   julia --project=<examples-dir> profile_pt_hotspots.jl [graph] [M] [n_rounds]
 #
-# backend defaults to "threaded" ("serial" for the nthreads=1 reference point).
 # graph defaults to "ct" (also: hex10/hex20/hex30/hex40/hex50 [hex == hex10], grid,
-# nc, oh).
-# M (rung count) defaults to max(nthreads, 8) — ThreadedBackend spawns exactly M
-# tasks/round, so M must be >= nthreads or scaling flatlines below the thread count.
-# Prints one CSV line to stdout:
-#   nthreads,backend,graph,M,elapsed_s,total_mh_steps,steps_per_sec,mean_straggler_gap,mean_swap_rate
+# nc, oh). M (rung count) defaults to 8, n_rounds to 50 (swap_interval is fixed at
+# 200, matching profile_pt_threaded.jl's default point).
+#
+# Always uses SerialBackend, never ThreadedBackend: Profile samples one call stack
+# per tick, so a Threads.@spawn'd run would split its samples across tasks/threads
+# and blur the attribution. A serial run's hotspots are the same functions a
+# threaded run spends time in per-replica — just measured without that noise.
+#
+# Prints a flat, count-sorted text hotspot table via Profile.print (stdlib only,
+# no extra dependency, works headless over ssh/tmux).
 
 const EXAMPLES = normpath(@__DIR__)
 
@@ -18,9 +24,11 @@ Pkg.activate(EXAMPLES)
 using CycleWalk
 using RandomNumbers
 using DataStructures: OrderedDict
+using Profile
 
-backend_kind = length(ARGS) >= 1 ? ARGS[1] : "threaded"
-graph_kind   = length(ARGS) >= 2 ? ARGS[2] : "ct"
+graph_kind = length(ARGS) >= 1 ? ARGS[1] : "ct"
+M          = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 8
+n_rounds   = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 50
 
 gamma      = 0.3
 iso_weight = 0.3
@@ -34,8 +42,6 @@ if graph_kind == "ct"
                   area_col="area", node_border_col="border_length",
                   edge_perimeter_col="length")
 elseif graph_kind in ("hex", "hex10", "hex20", "hex30", "hex40", "hex50")
-    # "hex" is an alias for "hex10"; all sizes are the same uniform lattice (every
-    # node has population/area 1), so num_dists/pop_dev don't vary with size.
     hex_n = graph_kind == "hex" ? 10 : parse(Int, graph_kind[4:end])
     graph_path = joinpath(EXAMPLES, "data", "hex", "hex_graph_$(hex_n)_by_$(hex_n).json")
     num_dists  = 5
@@ -46,10 +52,8 @@ elseif graph_kind in ("hex", "hex10", "hex20", "hex30", "hex40", "hex50")
                   area_col="area", node_border_col="border_length",
                   edge_perimeter_col="length")
 elseif graph_kind == "nc"
-    # "uid" is a DERIVED column (county * "_" * prec_id): prec_id alone is not
-    # unique across counties (see the codedoc geographic page), so build the
-    # BaseGraph first and derive "uid" before wrapping it into a Graph — same
-    # order run_cyclewalk_toml.jl's [plans.derive] handling uses.
+    # "uid" is a DERIVED column (county * "_" * prec_id) — see profile_pt_threaded.jl
+    # for why this needs a BaseGraph + derive_node_columns! step first.
     graph_path = joinpath(EXAMPLES, "data", "nc", "NC_pct21.json")
     num_dists  = 14
     pop_dev    = 0.02
@@ -93,39 +97,24 @@ measure = Measure()
 push_energy!(measure, get_log_spanning_forests, gamma)
 push_energy!(measure, get_isoperimetric_score, iso_weight)
 
-# M (rung count) must be >= the thread count to give ThreadedBackend anything to
-# scale onto: advance! spawns exactly M tasks per round, one per replica, so with
-# M=8 fixed, scaling flatlines at 8 threads regardless of how many cores are
-# available. Default to nthreads (or 8, whichever is larger) unless overridden.
-M = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : max(Threads.nthreads(), 8)
 lattice = linear_betas(M)
+swap_interval = 200
 
-function run_once(swap_interval, n_rounds, seed)
+function run_once(n_rounds, seed)
     rng = PCG.PCGStateOneseq(UInt64, seed)
     partition = LinkCutPartition(graph, constraints, num_dists; rng=rng, verbose=false)
-    backend = backend_kind == "serial" ? SerialBackend(proposal) :
-              backend_kind == "threaded" ? ThreadedBackend(proposal, M) :
-              error("unknown backend \"$backend_kind\" (expected \"serial\" or \"threaded\")")
-    ensemble, diag = run_parallel_tempering!(partition, proposal, measure, lattice,
-                                             swap_interval, n_rounds, rng;
-                                             init_steps=0, backend=backend,
-                                             write_rungs=:none, writers=nothing)
-    return ensemble, diag
+    backend = SerialBackend(proposal)
+    run_parallel_tempering!(partition, proposal, measure, lattice, swap_interval,
+                             n_rounds, rng; init_steps=0, backend=backend,
+                             write_rungs=:none, writers=nothing)
 end
 
-# warm-up: absorb JIT/precompilation so the timed run measures steady-state throughput
-run_once(5, 3, 1)
+# warm-up: absorb JIT/precompilation so the profile captures steady-state work,
+# not compilation of the proposal/energy functions.
+run_once(3, 1)
 
-swap_interval = 200
-n_rounds = 50
-seed = 20260801
-elapsed = @elapsed (ensemble, diag) = run_once(swap_interval, n_rounds, seed)
+Profile.clear()
+Profile.@profile run_once(n_rounds, 20260801)
 
-total_steps = M * swap_interval * n_rounds
-steps_per_sec = total_steps / elapsed
-mean_gap = isempty(diag.straggler_gap) ? NaN : sum(diag.straggler_gap) / length(diag.straggler_gap)
-rates = filter(!isnan, swap_rate(diag))
-mean_rate = isempty(rates) ? NaN : sum(rates) / length(rates)
-
-println("$(Threads.nthreads()),$(backend_kind),$(graph_kind),$(M),$(elapsed),$(total_steps)," *
-        "$(steps_per_sec),$(mean_gap),$(mean_rate)")
+println("=== hotspots: graph=$graph_kind, M=$M, swap_interval=$swap_interval, n_rounds=$n_rounds ===")
+Profile.print(format=:flat, sortedby=:count, mincount=20)
