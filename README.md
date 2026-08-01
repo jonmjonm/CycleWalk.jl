@@ -194,6 +194,25 @@ supported; see `examples/toml/param_annealed_smc_grid.toml` for an example confi
 julia -t 4 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
 ```
 
+### Parallel Tempering (PT)
+
+The script [`examples/run_pt_toml.jl`](./examples/run_pt_toml.jl) runs a parallel
+tempering sampler — a ladder of replicas, each held at a different point between the
+base and target measures, periodically proposing swaps between adjacent rungs (a
+deterministic even-odd, non-reversible swap scheme) so samples can move between
+temperatures instead of being stuck annealing alone. `SerialBackend` and
+`ThreadedBackend` are both exact (the threaded backend is verified bitwise-equivalent
+to serial); `ThreadedBackend` spawns one task per rung, so give it `-t N` matching or
+exceeding `[pt] n_rungs`. See `examples/toml/param_pt_grid.toml` for an example
+configuration:
+```
+julia -t 8 run_pt_toml.jl toml/param_pt_grid.toml
+```
+
+**[`docs/run_pt_toml.md`](./docs/run_pt_toml.md) documents the `[pt]` table, the two
+tempering modes (`linear`/`path`), the optional heat bath, and how rung count should be
+sized to available threads.**
+
 
 
 
