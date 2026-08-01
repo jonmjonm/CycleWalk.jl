@@ -154,9 +154,9 @@ The output file name carries every parameter the measure reads, so the points of
 never collide, and a run that would overwrite an existing Atlas stops unless you pass
 `--overwrite`.
 
-**[`docs/run_cyclewalk_toml.md`](./docs/run_cyclewalk_toml.md) documents every key, the
+[`docs/run_cyclewalk_toml.md`](./docs/run_cyclewalk_toml.md) documents every key, the
 energies and observables a configuration may name, how the output name is built, all the
-command-line overrides, and the earlier (still supported) `measure_scores` form.**
+command-line overrides, and the earlier (still supported) `measure_scores` form.
 
 #### Extending an ensemble
 
@@ -183,6 +183,9 @@ AIS from a TOML configuration file (see `examples/toml/param_ais_ct.toml`):
 julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
 ```
 
+[`docs/run_ais_toml.md`](./docs/run_ais_toml.md) documents the `[ais]` table, the
+`linear`/`path` tempering modes, and the Amdahl-law scaling ceiling on `ntasks`.
+
 ### Annealed Sequential Monte Carlo (SMC)
 
 The script [`examples/run_asmc_toml.jl`](./examples/run_asmc_toml.jl) runs an annealed
@@ -193,6 +196,10 @@ supported; see `examples/toml/param_annealed_smc_grid.toml` for an example confi
 ```
 julia -t 4 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
 ```
+
+[`docs/run_asmc_toml.md`](./docs/run_asmc_toml.md) documents the `[smc]` table, the
+`fixed`/`adaptive` schedules, the `linear`/`path` tempering modes, and post-anneal
+amplification via `collect_steps`.
 
 ### Parallel Tempering (PT)
 
@@ -209,9 +216,9 @@ configuration:
 julia -t 8 run_pt_toml.jl toml/param_pt_grid.toml
 ```
 
-**[`docs/run_pt_toml.md`](./docs/run_pt_toml.md) documents the `[pt]` table, the two
+[`docs/run_pt_toml.md`](./docs/run_pt_toml.md) documents the `[pt]` table, the two
 tempering modes (`linear`/`path`), the optional heat bath, and how rung count should be
-sized to available threads.**
+sized to available threads.
 
 
 
