@@ -18,8 +18,8 @@ julia --project=. run_cyclewalk_toml.jl toml/param_grid4x4.toml
 | [`run_cyclewalk_ct.jl`](run_cyclewalk_ct.jl) | The same Connecticut run written directly in Julia: the shortest path from graph to Atlas, for when a config file is not enough. |
 | [`run_cyclewalk_ct_metadata.jl`](run_cyclewalk_ct_metadata.jl) | Focused on what lands in the Atlas header, and on registering your own observables with `push_writer!`. |
 | [`run_cyclewalk_extend.jl`](run_cyclewalk_extend.jl) | Adds samples to a finished Atlas, restarting from its last recorded plan and reading its config back out of its header. |
-| [`run_ais_ct.jl`](run_ais_ct.jl), [`run_ais_toml.jl`](run_ais_toml.jl) | Annealed importance sampling: a base chain plus an annealing pass per retained sample. The base chain is serial, so speedup is capped at `(base_steps_per_sample + steps_per_annealing) / base_steps_per_sample` however many threads you give it. |
-| [`run_asmc_toml.jl`](run_asmc_toml.jl) | Annealed sequential Monte Carlo: a particle population tempered from the base measure to the target. Give it `init_steps > 0` — required with `schedule = "adaptive"`, and without it the population starts as N identical clones. |
+| [`run_ais_ct.jl`](run_ais_ct.jl), [`run_ais_toml.jl`](run_ais_toml.jl) | Annealed importance sampling: a base chain plus an annealing pass per retained sample. The base chain is serial, so speedup is capped at `(base_steps_per_sample + steps_per_annealing) / base_steps_per_sample` however many threads you give it — see [`docs/run_ais_toml.md`](../docs/run_ais_toml.md). |
+| [`run_asmc_toml.jl`](run_asmc_toml.jl) | Annealed sequential Monte Carlo: a particle population tempered from the base measure to the target. Give it `init_steps > 0` — required with `schedule = "adaptive"`, and without it the population starts as N identical clones — see [`docs/run_asmc_toml.md`](../docs/run_asmc_toml.md). |
 | [`run_pt_toml.jl`](run_pt_toml.jl) | Parallel tempering: a ladder of replicas tempered from the base measure to the target, swapping adjacent rungs. `ThreadedBackend` spawns one task per rung, so give it `-t N` matching or exceeding `[pt] n_rungs` — see [`docs/run_pt_toml.md`](../docs/run_pt_toml.md) and [`docs/pt_profiling_notes.md`](../docs/pt_profiling_notes.md) for scaling data. |
 | [`parameterUtils.jl`](parameterUtils.jl), [`runtimeParameters.jl`](runtimeParameters.jl) | Included by the runners, not run directly: command-line parsing and every quantity derived from a config. |
 
@@ -75,7 +75,7 @@ julia --project=. run_cyclewalk_toml.jl toml/param_ct.toml --thread_id 7 --gamma
 julia --project=. run_cyclewalk_toml.jl toml/param_ct.toml --set measure.vra_weight=2.0
 ```
 
-📖 **[`docs/run_cyclewalk_toml.md`](../docs/run_cyclewalk_toml.md) documents every key,
+📖 [`docs/run_cyclewalk_toml.md`](../docs/run_cyclewalk_toml.md) documents every key,
 every energy and observable you can name, how the output file name is built, all the
-command-line overrides, and what the error messages mean.** Start there when writing a
+command-line overrides, and what the error messages mean. Start there when writing a
 configuration of your own.
