@@ -10,10 +10,13 @@ same way [`run_cyclewalk_toml.jl`](../examples/run_cyclewalk_toml.jl) and
 directly in Julia, with no config file.
 
 This document covers what's specific to AIS — the `[ais]` table, output, and the
-scaling ceiling. **`[plans]` and `[measure]` are identical to every other TOML
-runner** — see
+scaling ceiling. `[plans]` and `[measure]` are read the same way every other TOML
+runner reads them — see
 [`run_cyclewalk_toml.md`](run_cyclewalk_toml.md#plans--the-map-and-the-districts) for
-those.
+those — with two exceptions this runner does not support: `[plans.derive]` (computed
+node columns) is silently ignored, since only `run_cyclewalk_toml.jl` calls
+`derive_node_columns!`; and `[[measure.energy]] context` may not include `"base_graph"`
+(only `"graph"`, `"num_dists"`, `"pop_col"` are available here).
 
 - [Quick start](#quick-start)
 - [A minimal configuration](#a-minimal-configuration)
@@ -29,11 +32,14 @@ those.
 ```bash
 cd examples
 julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml
+julia -t 4 run_ais_toml.jl toml/param_ais_ct.toml --overwrite
 ```
 
 `-t` threads run concurrent annealing tasks (see
 [the scaling ceiling](#the-scaling-ceiling-why-ntasks-has-a-limit) for how many are
-actually useful).
+actually useful). `--overwrite` is the only flag this runner reads besides the config
+path — there is no per-key `--set`/named-flag override here, unlike
+`run_cyclewalk_toml.jl` and `run_asmc_toml.jl`.
 
 ## A minimal configuration
 
@@ -133,10 +139,15 @@ graph JSON ──▶ BaseGraph ──▶ Graph ──▶ base chain, at weight_s
 | `temper` | `"linear"` (default) or `"path"` — see below. |
 
 `[run]` carries `ntasks` (default `Threads.nthreads()`, concurrent annealing tasks) and
-`blas_threads` (default `0`: AIS auto-pins BLAS to 1 thread whenever `ntasks > 1`, since
-the spanning-forest energy's per-district log-determinant calls LAPACK, and several
-tasks each spawning their own BLAS pool oversubscribes the machine; set `blas_threads`
-to override).
+`blas_threads`. Whenever `ntasks > 1`, `run_annealed_importance_sampling!`
+unconditionally pins BLAS to 1 thread for the duration of the run — several tasks each
+spawning their own BLAS pool for the spanning-forest energy's per-district
+log-determinant would oversubscribe the machine — and restores the prior BLAS thread
+count when it finishes; `blas_threads` cannot override this pin while `ntasks > 1`.
+What `blas_threads` (default `0`, meaning "leave BLAS's own default alone") actually
+controls: the thread count set *before* the run starts, which only matters when
+`ntasks == 1` (nothing pins BLAS in that case, so this value holds for the whole run),
+or as the value BLAS is left at afterward when `ntasks > 1`.
 
 ## `linear` and `path` tempering
 
@@ -190,9 +201,14 @@ highest.
 
 - `ais.temper must be "linear" or "path", got "..."` — typo'd or unsupported mode name.
 - `[measure] defines a parameter named "t", which is reserved for weight_path
-  expressions` — only relevant with `temper = "path"`; rename the parameter.
+  expressions` — `t` is checked unconditionally while parsing `[measure]`, before
+  `[ais] temper` is even read, so this fires under `temper = "linear"` too; rename the
+  parameter.
 - `energy "..." has both weight_start and weight_path` — pick one tempering mode per
   energy.
 - `map file not found: ...` — `[plans] map_directory`/`map_file` don't resolve to a
   real file (paths are relative to wherever you run the script from — normally
   `examples/`).
+- `<path> already exists, and this run would truncate it. Pass --overwrite ...` — an
+  Atlas of that name already exists; pass `--overwrite`, or change `thread_id` /
+  `atlasNameBase` / the measure parameters so the run gets a new name.

@@ -5,7 +5,7 @@ using Test
 # Tests for parallel tempering (src/chains/parallel_tempering*.jl). Follows
 # test_annealed_smc.jl's structure: pure-helper unit tests first, then driver
 # invariants, then ground truth. Internal (unexported) helpers are reached through
-# the CycleWalk namespace. See docs/parallel_tempering_implementation.md §7.
+# the CycleWalk namespace. See memories/parallel_tempering_implementation.md §7.
 
 @testset verbose = true "parallel_tempering" begin
     pt_testdir = dirname(@__FILE__)

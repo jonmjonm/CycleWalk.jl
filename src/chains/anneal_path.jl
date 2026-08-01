@@ -1,7 +1,7 @@
 # =============================================================================
 # AnnealPath — the shared "path through measure space" seam
 #
-# Extracted from annealed_smc.jl (see docs/parallel_tempering_implementation.md,
+# Extracted from annealed_smc.jl (see memories/parallel_tempering_implementation.md,
 # task 1) so parallel tempering can reuse it without `include`ing the SMC file.
 # Annealed SMC and parallel tempering both temper a `Measure` along t/β via the
 # same two seams: `energy_at` (arithmetic-only incremental weights, for anything

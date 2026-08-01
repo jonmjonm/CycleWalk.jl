@@ -1,7 +1,7 @@
 # =============================================================================
 # Parallel tempering — advance backends
 #
-# See docs/parallel_tempering_implementation.md (tasks 4, 7, 9). `SerialBackend` is a
+# See memories/parallel_tempering_implementation.md (tasks 4, 7, 9). `SerialBackend` is a
 # plain loop and is needed by the driver itself (task 4); `ThreadedBackend` (task 7)
 # and `DistributedBackend` (task 9) are a performance layer on top of the same
 # `advance!` seam and must reproduce `SerialBackend` bit for bit.

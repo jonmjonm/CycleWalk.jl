@@ -1,7 +1,7 @@
 # =============================================================================
 # Parallel tempering — core types
 #
-# See docs/parallel_tempering_implementation.md (task 2) for the design rationale.
+# See memories/parallel_tempering_implementation.md (task 2) for the design rationale.
 # =============================================================================
 
 # ------------------------------------------------------------------ beta lattice

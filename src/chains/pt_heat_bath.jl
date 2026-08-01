@@ -1,7 +1,7 @@
 # =============================================================================
 # Parallel tempering — heat bath exchange
 #
-# See docs/parallel_tempering_implementation.md (task 8) and §2.4 of the design
+# See memories/parallel_tempering_implementation.md (task 8) and §2.4 of the design
 # rationale. `HeatBath` itself is defined in parallel_tempering_types.jl; this file
 # builds one from a stored Atlas and implements the exchange move.
 # =============================================================================

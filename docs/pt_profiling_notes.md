@@ -149,10 +149,13 @@ for the case that genuinely needs it (M or per-replica memory beyond one machine
 or spreading across a real multi-node cluster), but it is not fixing a scaling
 problem `ThreadedBackend` actually has — the earlier concern that motivated
 building it *right after* the threaded backend (roadmap task ordering) is not borne
-out by this data. Reasonable to finish task 10 (runner/config/docs) first, as
-already decided, and revisit task 9 with a concrete M/cluster-size target in mind
-rather than as a default next step.
+out by this data. Task 10 (runner/config/docs) has since shipped as
+`examples/run_pt_toml.jl` / `docs/run_pt_toml.md`; task 9 remains deprioritized per
+the data above, to be revisited only with a concrete M/cluster-size target in mind,
+not as a default next step.
 
-One methodology note to carry into task 10's defaults: **pick `n_rungs` with the
-target core count in mind**, not a fixed default like 8 — the config's
-`backend = "threaded"` default is only as good as M lets it be.
+The methodology note this data motivated: **pick `n_rungs` with the target core
+count in mind**, not a fixed default like 8. `run_pt_toml.md` ships `n_rungs = 8` as
+its default (a reasonable smoke-test/fallback value, not a scaling recommendation)
+and separately documents this in its own "Sizing `n_rungs` to your machine"
+section — raise it to at least your thread count for a production run.

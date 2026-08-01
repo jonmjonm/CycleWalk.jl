@@ -94,6 +94,8 @@ julia -e 'using Pkg; Pkg.add("CycleWalk")'
 
 The most update directions can be found at [duke.is/cyclewalk](https://duke.is/CycleWalk). Those pages contain many examples and a basic introduction to using the Cycle Walk library.
 
+Parallel tempering, and the annealed-importance-sampling/SMC `path` tempering mode, require `CycleWalk.jl` v0.2.3 or later.
+
 ## Example Scripts from the Git Repo
 
 The `examples` directory contains example scripts that demonstrate how to use the Metropolized Cycle Walk algorithm. These scripts can be run to generate redistricting plans and analyze their properties. [`examples/README.md`](./examples/README.md) describes what is there — the scripts, the sample graphs, and the ready-to-run configurations in `examples/toml`.

@@ -1,5 +1,13 @@
 # Parallel tempering in CycleWalk.jl — implementation roadmap
 
+> **Historical design record — parallel tempering has since shipped.** This roadmap
+> predates the implementation and is kept as a build-process record, not current
+> documentation. Some tasks below describe designs that changed during implementation
+> — notably task 9's `DistributedBackend` (never built; only `SerialBackend`/
+> `ThreadedBackend` shipped) and the three-mode `temper = "all"/"gamma"/"explicit"`
+> scheme (unified into `temper = "linear"/"path"` in the shipped design). For the
+> current, accurate reference, see [`docs/run_pt_toml.md`](../docs/run_pt_toml.md).
+
 **Audience: an implementing agent or developer with no prior context on this feature.**
 
 This is the *build* document. Its companion

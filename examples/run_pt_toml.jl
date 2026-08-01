@@ -105,7 +105,7 @@ output_every  = Int(get(pt, "output_every", 1))
 
 backend_kind in ("serial", "threaded") ||
     error("pt.backend must be \"serial\" or \"threaded\" for now (\"distributed\" " *
-          "is not implemented yet — see docs/parallel_tempering_implementation.md " *
+          "is not implemented yet — see memories/parallel_tempering_implementation.md " *
           "task 9), got \"$backend_kind\"")
 temper_kind in ("linear", "path") ||
     error("pt.temper must be \"linear\" or \"path\", got \"$temper_kind\"")
