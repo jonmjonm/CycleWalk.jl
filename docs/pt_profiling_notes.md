@@ -223,20 +223,31 @@ being its cause.
 Status of the three follow-ups identified here:
 
 1. `set_areas_and_perimeters!`'s O(N) full-graph scan per changed district —
-   **attempted twice on `perf/cholesky-sparse-vs-dense`, both reverted.** A
-   link-cut-tree walk (visiting only a district's own nodes, `O(|di|)` instead of
-   `O(N)`) came out a wash to slightly worse in direct timing on `oh` (2,073-2,098
-   before vs. 1,887-2,034 steps/s after) — the walk's pointer-chasing overhead
-   (`expose!`, growing a `Vector` via `push!`/`pop!`) ate the savings from visiting
-   fewer nodes; a plain sequential array scan is too cache-friendly to beat that
-   way. A combined single pass (all changed districts in one O(N) scan instead of
-   one O(N) scan per changed district) was also a wash (2,084-2,111 steps/s) —
-   *why*, in hindsight: `potrf!` alone was ~35% of real profiler samples on `oh` at
-   the time, so even fully eliminating this scan's redundancy only touched a small
-   slice of total cost. **Worth re-benchmarking now** (not yet done): with the
-   Cholesky fix below in place, `set_areas_and_perimeters!` accounts for ~11% of
-   real work on `nc`'s profile (comparable to `potrf!` alone) — a fix that was
-   noise-level against the old baseline might be measurable against the new one.
+   **attempted three times now (on two different branches), all three reverted.**
+   Before the Cholesky fix (`perf/cholesky-sparse-vs-dense`): a link-cut-tree walk
+   (visiting only a district's own nodes, `O(|di|)` instead of `O(N)`) came out a
+   wash to slightly worse in direct timing on `oh` (2,073-2,098 before vs.
+   1,887-2,034 steps/s after) — the walk's pointer-chasing overhead (`expose!`,
+   growing a `Vector` via `push!`/`pop!`) ate the savings from visiting fewer
+   nodes; a plain sequential array scan is too cache-friendly to beat that way. A
+   combined single pass (all changed districts in one O(N) scan instead of one
+   O(N) scan per changed district) was also a wash at the time (2,084-2,111
+   steps/s) — plausibly because `potrf!` alone was ~35% of real profiler samples
+   on `oh` then, so even fully eliminating this scan's redundancy only touched a
+   small slice of total cost.
+
+   That raised a reasonable hypothesis — retested on `perf/isoperimetric-combined-scan`
+   (branched from the Cholesky fix, so `potrf!`'s share is already reduced): the
+   combined single pass, re-measured against a clean same-day baseline, came out a
+   small but fairly consistent **regression** on the real maps — `oh` 3,470 ->
+   3,374 steps/s (0.97x), `nc` 8,668 -> 8,398 (0.97x, before/after ranges
+   non-overlapping) — and an ambiguous small gain on `hex50` (1.03x, ranges
+   overlap). The hypothesis that a shrunk Cholesky share would make this fix
+   measurable didn't pan out; if anything it went the other way. Not revisiting
+   again without a genuinely different angle on the problem (e.g. actually
+   tracking which nodes moved, rather than any form of full/partial rescan) — that
+   would be a different, more invasive change to the proposal/Update machinery,
+   not a drop-in replacement for this one function.
 2. `get_log_spanning_trees`'s dense-vs-sparse Cholesky — **done, see below.**
 3. Reusing a scratch buffer for `get_log_spanning_trees`'s per-call `m×m`
    allocation — still open, lower priority than (1) now.
