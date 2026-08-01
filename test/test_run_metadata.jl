@@ -161,6 +161,41 @@
         end
     end
 
+    @testset "PT stamps its tag, lattice, backend, and weight endpoints" begin
+        mktempdir() do dir
+            path = joinpath(dir, "pt.jsonl.gz")
+            p = fresh_partition(8)
+            m = make_measure()
+            lattice = linear_betas(4)
+            w = Writer(m, constraints, p, path)
+            run_parallel_tempering!(p, proposal, m, lattice, 5, 3,
+                                    PCG.PCGStateOneseq(UInt64, 8);
+                                    writers=w, seed=2024)
+            close_writer(w)
+
+            ap = read_atlas_param(path)
+            @test ap["chain.run"] == "parallel tempering CycleWalk"
+            params = ap["chain.parameters"]
+            @test params["function"] == "run_parallel_tempering!"
+            @test params["betas"] == [0.0, 1/3, 2/3, 1.0]
+            @test params["n_rungs"] == 4
+            @test params["swap_interval"] == 5
+            @test params["n_rounds"] == 3
+            @test params["total_steps"] == 15
+            @test params["swap_scheme"] == "deterministic even/odd (non-reversible, DEO)"
+            @test params["backend"] == "serial"
+            @test params["workers"] == 1
+            @test params["init_steps"] == 0
+            @test params["write_rungs"] == "target"
+            @test params["output_every"] == 1
+            @test params["heat_bath"] === nothing
+            @test params["seed"] == 2024
+            @test params["weights.hot"]["get_log_spanning_forests"] == 0.0
+            @test params["weights.target"]["get_isoperimetric_score"] == 0.3
+            @test length(params["proposal"]) == 2
+        end
+    end
+
     @testset "user additional_parameters win over auto-stamped fields" begin
         mktempdir() do dir
             path = joinpath(dir, "override.jsonl.gz")

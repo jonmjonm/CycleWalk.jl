@@ -235,3 +235,72 @@ function annealed_smc_run_metadata(
         "chain.parameters" => params,
     )
 end
+
+"""
+    parallel_tempering_run_metadata(measure, lattice, swap_interval, n_rounds;
+        seed=nothing, path=nothing, proposal=nothing, backend=SerialBackend(proposal),
+        init_steps=0, write_rungs=:target, output_every=1, heat_bath=nothing,
+        extra=Dict())
+
+Build the run-metadata dict for a parallel-tempering CycleWalk run
+([`run_parallel_tempering!`](@ref)). `run_parallel_tempering!` stamps this
+automatically. Records the β-lattice, the swap scheme, the backend and its worker
+count, the hot- and target-rung weight endpoints (`weights_at` at `lattice[1]` and
+`lattice[end]`, labelled by score — mirrors `annealed_smc_run_metadata`'s
+`weights.base`/`weights.target`), and the heat bath's configuration when present.
+
+The Atlas header is written once, before the first map (like every other sampler's
+metadata), so it cannot carry the diagnostics a run only *finishes* with (swap rates,
+round trips, straggler gap) — those belong to whatever reads `PTDiagnostics` after the
+run (see `examples/validation/smoke_pt.jl`), not to this header.
+"""
+function parallel_tempering_run_metadata(
+    measure::Measure,
+    lattice::BetaLattice,
+    swap_interval::Integer,
+    n_rounds::Integer;
+    seed=nothing,
+    path::Union{AnnealPath, Function, Nothing}=nothing,
+    proposal::Union{Function, Vector, Nothing}=nothing,
+    backend::PTBackend=SerialBackend(proposal),
+    init_steps::Int=0,
+    write_rungs::Symbol=:target,
+    output_every::Int=1,
+    heat_bath::Union{HeatBath, Nothing}=nothing,
+    extra::AbstractDict=Dict{String, Any}(),
+)
+    scores, target_w = measure_scores_and_targets(measure)
+    K = length(scores)
+    p = path === nothing ? linear_path(target_w) :
+        path isa Function ? LinearPath{K}(path) : path
+
+    params = Dict{String, Any}(
+        "function"       => "run_parallel_tempering!",
+        "betas"          => copy(lattice.betas),
+        "n_rungs"        => length(lattice),
+        "swap_interval"  => swap_interval,
+        "n_rounds"       => n_rounds,
+        "total_steps"    => swap_interval * n_rounds,
+        "swap_scheme"    => "deterministic even/odd (non-reversible, DEO)",
+        "backend"        => backend_name(backend),
+        "workers"        => backend_workers(backend),
+        "init_steps"     => init_steps,
+        "write_rungs"    => String(write_rungs),
+        "output_every"   => output_every,
+        "heat_bath"      => heat_bath === nothing ? nothing :
+                            Dict{String, Any}("source"    => heat_bath.source_path,
+                                              "rung"       => heat_bath.rung,
+                                              "n_samples"  => length(heat_bath.samples),
+                                              "weights"    => _weights_dict(heat_bath.measure)),
+        "threads"        => Threads.nthreads(),
+        "weights.hot"    => _label_weights(scores, weights_at(p, lattice[1]),   measure),
+        "weights.target" => _label_weights(scores, weights_at(p, lattice[end]), measure),
+    )
+    _maybe_seed!(params, seed)
+    proposal !== nothing && (params["proposal"] = describe_proposal(proposal))
+    merge!(params, Dict{String, Any}(extra))
+    return Dict{String, Any}(
+        "chain.run"        => "parallel tempering CycleWalk",
+        "chain.parameters" => params,
+    )
+end

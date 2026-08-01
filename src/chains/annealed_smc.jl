@@ -40,10 +40,6 @@
 # returned logZ = 0.0.
 # =============================================================================
 
-# ------------------------------------------------------------------ tuple utils
-@inline _dot(a::NTuple{K,Float64}, b::NTuple{K,Float64}) where {K} = sum(map(*, a, b))
-@inline _sub(a::NTuple{K,Float64}, b::NTuple{K,Float64}) where {K} = map(-, a, b)
-
 # ------------------------------------------------------------------ particle
 """
     Particle{K}
@@ -163,109 +159,18 @@ done(sched::FixedSchedule)     = sched.k + 1 >= length(sched.grid)
 done(sched::AdaptiveTempering) = sched.t_prev >= 1.0
 
 # ------------------------------------------------------------------ path + seam
-"""
-    AnnealPath
-
-A schedule path through measure space. Subtypes supply the two seams the driver
-routes through — [`energy_at`](@ref) (incremental weights / adaptive ESS) and
-[`configure_measure!`](@ref) (rejuvenation) — so the driver itself assumes nothing
-about how the measure depends on `t`.
-"""
-abstract type AnnealPath end
+# AnnealPath, LinearPath, linear_path, weights_at, energy_at (on phi),
+# configure_measure!, set_measure_weights!, measure_scores_and_targets, and
+# ess_from_logw live in anneal_path.jl — the seam parallel tempering shares.
+# Only the Particle-specific forwarding method lives here.
 
 """
-    LinearPath{K}(weights_at)
+    energy_at(path, particle::Particle, t) -> Float64
 
-Log-LINEAR path: `weights_at(t)::NTuple{K,Float64}` gives each energy term's weight
-at `t` (in `scores` order); the energies themselves don't depend on `t`. So
-`E(state,t) = ⟨weights_at(t), phi⟩` with the cached path-independent `phi`, and both
-seams are arithmetic-only. Covers all reweighting, incl. turning terms on/off (weight
-0 → positive). A bare `t ↦ NTuple` passed as `path` is wrapped as one of these.
+Forwards to the generic `energy_at(path, phi, t)` in anneal_path.jl using the
+particle's cached potentials.
 """
-struct LinearPath{K,F} <: AnnealPath
-    weights_at::F
-end
-LinearPath{K}(f::F) where {K,F} = LinearPath{K,F}(f)
-@inline weights_at(p::LinearPath, t) = p.weights_at(t)
-
-"""
-    linear_path(target_w) -> LinearPath
-
-The diagonal path `t ↦ t .* target_w`, reproducing the linear γ+iso schedule
-`modify_measure!` used. `target_w` is the target measure's per-term weights, in
-`scores` order (see `annealed_smc_scores_and_targets`). Swap for a staged-L / nonzero-base /
-fitted path: any `t ↦ NTuple{K}` starting at base weights (t=0), ending at
-`target_w` (t=1) — still a `LinearPath`.
-"""
-linear_path(target_w::NTuple{K,Float64}) where {K} =
-    LinearPath{K}(t -> map(w -> t * w, target_w))
-
-# --- the seam ----------------------------------------------------------------
-# THE two functions that touch how the measure depends on t. Everything else
-# (schedules, resample, rejuvenate, driver) is written against these, so a
-# non-log-linear path is added by defining a new AnnealPath subtype with its own
-# `energy_at` / `configure_measure!` — no change to the driver.
-#
-# Future GeneralPath sketch (annealing a param INSIDE an energy — an exponent,
-# tolerance threshold, soft-constraint temperature — so raw energies depend on t):
-#     struct GeneralPath <: AnnealPath; configure!::Function; scratch::Measure; end
-#     energy_at(gp::GeneralPath, p, t)  = (gp.configure!(gp.scratch, t);
-#                                          get_log_energy(p.state, gp.scratch))
-#     configure_measure!(gp::GeneralPath, m, scores, t) = gp.configure!(m, t)
-# Correct but pays real energy evals per t → the adaptive root-find is no longer
-# free (N evals per bisection step). `phi`/refresh_potentials! are the LinearPath
-# optimization and are simply unused for such a path.
-
-"""
-    energy_at(path, particle, t) -> Float64
-
-Log-energy of `particle.state` under the measure at schedule point `t`. All
-incremental-weight and adaptive-ESS math goes through this. `LinearPath` reads the
-cached potentials (`⟨weights(t), phi⟩`) — arithmetic only.
-
-This is an ENERGY: the density at `t` is `ν_t ∝ exp(−energy_at(path, p, t))`. Callers
-forming a log-density ratio therefore want `energy_at(t_prev) − energy_at(t)` (see this
-file's header).
-"""
-@inline energy_at(path::LinearPath, p::Particle, t::Float64) =
-    _dot(weights_at(path, t), p.phi)
-
-"""
-    configure_measure!(path, m, scores, t)
-
-Set measure `m` to schedule point `t` for rejuvenation MH. `LinearPath` writes the
-per-term weights; a general path would also set any inside-energy parameters.
-"""
-function configure_measure!(path::LinearPath, m::Measure,
-                            scores::NTuple{K,Function}, t::Float64) where {K}
-    set_measure_weights!(m, scores, weights_at(path, t))
-end
-
-"""
-    annealed_smc_scores_and_targets(measure) -> (scores::NTuple{K,Function}, target_w::NTuple{K,Float64})
-
-Freeze the target `measure` into an ordered tuple of energy functions and their
-target weights. `scores` order is the single source of truth aligning each
-particle's `phi`, `path(t)`, and the rejuvenation measure.
-"""
-function annealed_smc_scores_and_targets(measure::Measure)
-    scores = Tuple(measure.scores)
-    target_w = map(e -> Float64(measure.weights[e]), scores)
-    return scores, target_w
-end
-
-# ------------------------------------------------------------------ primitives
-"""
-    ess_from_logw(logw) -> Float64
-
-Effective sample size (Σw)²/Σw² from unnormalized log-weights, stably.
-"""
-function ess_from_logw(logw::AbstractVector{Float64})
-    m = maximum(logw)
-    w = exp.(logw .- m)
-    s = sum(w)
-    return s * s / sum(abs2, w)
-end
+@inline energy_at(path::LinearPath, p::Particle, t::Float64) = energy_at(path, p.phi, t)
 
 """
     refresh_potentials!(particles, scores)
@@ -357,19 +262,6 @@ function resample!(particles::Vector{Particle{K}}, rng::AbstractRNG) where {K}
 end
 
 # ------------------------------------------------------------------ rejuvenation
-"""
-    set_measure_weights!(m, scores, w)
-
-Set `m`'s per-term weights to `w` (in `scores` order) for rejuvenation at the
-current `t`. Replaces the `modify_measure!` round-trip.
-"""
-function set_measure_weights!(m::Measure, scores::NTuple{K,Function},
-                              w::NTuple{K,Float64}) where {K}
-    for e in 1:K
-        m.weights[scores[e]] = w[e]
-    end
-end
-
 """
     rejuvenate!(particles, measure, proposal, steps, diags)
 

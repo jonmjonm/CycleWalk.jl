@@ -88,6 +88,52 @@ function evaluate_weight_expression(
 end
 
 """
+    weight_path_closure(expr, parameters) -> Function   # t::Float64 -> Float64
+
+Parse and validate `expr` ONCE — the same restricted grammar as
+[`evaluate_weight_expression`](@ref) (only `+ - * / ^`, numeric literals, and named
+parameters), with `t` additionally available as a bound name — and return a closure
+evaluating it against `t` alone. `parameters` (e.g. `gamma`, `iso_weight`) are
+resolved once, here, not re-looked-up on every call; the returned closure's only
+per-call cost is walking the small pre-parsed tree with `t` bound. Used to build a
+per-energy tempering schedule (`[[measure.energy]] weight_path = "..."`) without
+re-parsing the expression once per round.
+
+`t` is reserved for this purpose: a `[measure]` parameter named `t` is rejected by
+[`measure_parameters`](@ref) before it would ever reach here.
+"""
+function weight_path_closure(expr::AbstractString, parameters::AbstractDict)
+    ast = try
+        Meta.parse(strip(expr))
+    catch err
+        throw(ArgumentError("could not parse the expression \"$expr\""))
+    end
+    resolve = function (t::Float64)
+        counter = Ref(0)
+        value = _walk_weight_ast(ast, expr, 1, counter) do name
+            name == "t" && return t
+            if !haskey(parameters, name)
+                known = join(sort!(collect(String.(keys(parameters)))), ", ")
+                throw(ArgumentError("the expression \"$expr\" refers to \"$name\", " *
+                                    "which is not a known parameter (known: t, $known)"))
+            end
+            pval = parameters[name]
+            pval isa Real && !(pval isa Bool) ||
+                throw(ArgumentError("parameter \"$name\" is $(repr(pval)), not a number"))
+            float(pval)
+        end
+        isa(value, Real) && isfinite(value) ||
+            throw(ArgumentError("the expression \"$expr\" evaluates to $value at " *
+                                "t=$t, which is not a usable weight"))
+        return Float64(value)
+    end
+    resolve(0.0)   # validate once now (bad names / bad syntax fail at build time,
+                   # not on the first round of a run); a value that is only finite
+                   # away from t=0 still surfaces the moment that round is reached.
+    return resolve
+end
+
+"""
     weight_expression_parameters(expr) -> Vector{String}
 
 The names a weight expression reads, sorted and without repeats:
