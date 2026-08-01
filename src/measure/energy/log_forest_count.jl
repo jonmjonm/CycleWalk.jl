@@ -28,6 +28,23 @@ function LogForestEnergyData(partition::LinkCutPartition)
 end
 
 """
+    DENSE_CHOLESKY_MAX_M
+
+Districts with cofactor dimension `m` below this use a dense Cholesky
+(`get_log_spanning_trees`'s dense path); at or above it, a sparse one (CHOLMOD).
+Chosen from direct wall-clock benchmarks (assembly + factorization together, BLAS
+pinned to 1 thread as `run_parallel_tempering!` actually runs it) on real induced
+subgraphs from ct (districts ~120-146 nodes: dense wins, ratio 1.0-1.3x),  nc
+(districts 125-286 nodes: crosses over around 150-170), oh and hex50 (districts
+~350-600 nodes: sparse wins 3-4x) — see the benchmark record in
+`docs/pt_profiling_notes.md`. 160 sits just above ct's largest district and just
+below nc's crossover, erring toward dense (the safer/simpler default) at the
+boundary since real per-district sparsity is noisier than a clean function of `m`
+alone (nc's own districts don't sort monotonically by `m` in the 125-170 range).
+"""
+const DENSE_CHOLESKY_MAX_M = 160
+
+"""
     get_log_spanning_trees(node_to_dist, simple_graph, di)::Float64
 
 Low-level kernel: the log number of (weighted) spanning trees of district `di`, i.e.
@@ -35,12 +52,15 @@ of the subgraph of `simple_graph` induced by the nodes assigned to `di` in
 `node_to_dist`, via Kirchhoff's matrix-tree theorem.
 
 The grounded Laplacian of the induced subgraph (its Laplacian with the last district
-node's row/column deleted) is assembled directly into a dense matrix and its
+node's row/column deleted) is assembled directly from `simple_graph`'s sparse
+adjacency (no `induced_subgraph`, no intermediate sparse-then-dense copy) and its
 log-determinant taken by Cholesky — the grounded Laplacian of a connected graph is
-symmetric positive definite. This avoids materializing an `induced_subgraph`, a
-sparse Laplacian, and a dense copy of it on every call, which is the dominant
-allocator during sampling. A disconnected district has no spanning tree, so its
-(singular) grounded Laplacian yields `-Inf`.
+symmetric positive definite. Below [`DENSE_CHOLESKY_MAX_M`](@ref) nodes this builds a
+dense matrix (LAPACK `potrf!`); at or above it, a sparse one (CHOLMOD) — dense wins
+at small district sizes (less assembly/factorization overhead), sparse wins by
+several times at large ones (the induced subgraph of a real precinct or hex-lattice
+map is near-planar, so its fill-in stays low). A disconnected district has no
+spanning tree, so its (singular) grounded Laplacian yields `-Inf` on either path.
 """
 function get_log_spanning_trees(
     node_to_dist::Vector{Int64},
@@ -64,26 +84,52 @@ function get_log_spanning_trees(
     m = k - 1
     m <= 0 && return 0.0  # single-node (or empty) district has exactly one spanning tree
 
-    L = zeros(Float64, m, m)
     weights = simple_graph.weights  # SparseMatrixCSC of edge weights
     rows = rowvals(weights)
     vals = nonzeros(weights)
-    @inbounds for a = 1:k
-        u = nodes[a]
-        pu = pos[u]
-        pu > m && continue  # u is the grounded vertex; its row/column is dropped
-        for idx in nzrange(weights, u)
-            v = rows[idx]
-            pv = pos[v]
-            pv == 0 && continue  # neighbor not in this district
-            w = vals[idx]
-            L[pu, pu] += w                 # weighted degree (diagonal)
-            pv <= m && (L[pu, pv] -= w)    # off-diagonal (skip grounded vertex)
-        end
-    end
 
-    fact = cholesky!(Symmetric(L); check=false)
-    return issuccess(fact) ? logdet(fact) : -Inf
+    if m < DENSE_CHOLESKY_MAX_M
+        L = zeros(Float64, m, m)
+        @inbounds for a = 1:k
+            u = nodes[a]
+            pu = pos[u]
+            pu > m && continue  # u is the grounded vertex; its row/column is dropped
+            for idx in nzrange(weights, u)
+                v = rows[idx]
+                pv = pos[v]
+                pv == 0 && continue  # neighbor not in this district
+                w = vals[idx]
+                L[pu, pu] += w                 # weighted degree (diagonal)
+                pv <= m && (L[pu, pv] -= w)    # off-diagonal (skip grounded vertex)
+            end
+        end
+        fact = cholesky!(Symmetric(L); check=false)
+        return issuccess(fact) ? logdet(fact) : -Inf
+    else
+        Is = Int[]
+        Js = Int[]
+        Vs = Float64[]
+        @inbounds for a = 1:k
+            u = nodes[a]
+            pu = pos[u]
+            pu > m && continue
+            diag = 0.0
+            for idx in nzrange(weights, u)
+                v = rows[idx]
+                pv = pos[v]
+                pv == 0 && continue
+                w = vals[idx]
+                diag += w
+                if pv <= m
+                    push!(Is, pu); push!(Js, pv); push!(Vs, -w)
+                end
+            end
+            push!(Is, pu); push!(Js, pu); push!(Vs, diag)
+        end
+        L = sparse(Is, Js, Vs, m, m)
+        fact = cholesky(Symmetric(L); check=false)
+        return issuccess(fact) ? logdet(fact) : -Inf
+    end
 end
 
 """
