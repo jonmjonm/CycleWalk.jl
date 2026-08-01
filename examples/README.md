@@ -27,7 +27,7 @@ julia --project=. run_cyclewalk_toml.jl toml/param_grid4x4.toml
 
 | Directory | Contents |
 | --- | --- |
-| [`toml/`](toml) | Ready-to-run configurations: 4×4, 8×8 and 10×10 grids, a 10×10 hex lattice, Connecticut precincts, and the AIS/SMC/PT configs. |
+| [`toml/`](toml) | Ready-to-run configurations: 4×4, 8×8 and 10×10 grids, a 10×10 hex lattice, Connecticut precincts, North Carolina precincts (`param_nc.toml`, demonstrates `[plans.derive]`), and the AIS/SMC/PT configs. |
 | `data/` | The graphs those configs read (`ct/`, `grid/`, `hex/`, `nc/`, `oh/`). |
 | `output/` | Where runs write their Atlas files, under the config's `outputDirectory`. |
 | [`validation/`](validation) | Cross-checks of the annealed samplers against a standard cycle walk; has its own README. |
@@ -40,7 +40,9 @@ writes them to an Atlas, taking every setting from a TOML file. A configuration 
 tables:
 
 - **`[plans]`** — the graph to load and which of its columns are population, area and
-  perimeter; how many districts, and how tightly their populations must balance.
+  perimeter; how many districts, and how tightly their populations must balance. An
+  optional `[plans.derive]` subtable computes a named column from others (e.g. a
+  unique node name joined from columns that aren't unique alone) — see `param_nc.toml`.
 - **`[mcmc]`** — how many cycle-walk steps to run, and what fraction of proposals are
   two-tree moves.
 - **`[measure]`** — the target distribution: named numeric parameters, plus one

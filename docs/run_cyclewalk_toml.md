@@ -15,6 +15,7 @@ reads.
 - [What the script does with it](#what-the-script-does-with-it)
 - [Configuration reference](#configuration-reference)
   - [`[plans]` — the map and the districts](#plans--the-map-and-the-districts)
+  - [`[plans.derive]` — computing a column from other columns](#plansderive--computing-a-column-from-other-columns)
   - [`[mcmc]` — how long, and which moves](#mcmc--how-long-and-which-moves)
   - [`[measure]` — the target distribution](#measure--the-target-distribution)
   - [`[run]` — output, seeding, diagnostics](#run--output-seeding-diagnostics)
@@ -154,6 +155,45 @@ Types are TOML types. **Required** keys have no default; the run fails without t
 | `area_col` | string | `nothing` | Node area. Required by the Polsby-Popper compactness scores. |
 | `node_border_col` | string | `nothing` | Length of a node's boundary that lies on the outer boundary of the state. |
 | `edge_perimeter_col` | string | `nothing` | Edge column giving the perimeter shared by the edge's two nodes. |
+
+### `[plans.derive]` — computing a column from other columns
+
+Optional. Sometimes the column you want to name above — as `geo_units`, `pop_col`, or
+anywhere else a column name is expected — isn't one of the graph's raw columns, because
+no single raw column is what you need. The clearest example: North Carolina's precinct
+JSON has a `prec_id` column that **repeats across counties**, so it can't be `geo_units`
+(node names have to be unique) — but `county` joined with `prec_id` is:
+
+```toml
+[plans]
+geo_units = ["uid"]        # not a raw column — derived below
+
+[plans.derive]
+uid = "county * \"_\" * prec_id"
+```
+
+Each `name = "expr"` entry computes a new node attribute called `name` from `expr`,
+evaluated once per node, and adds it to the graph **before** anything else (including
+`geo_units` itself) looks a column up — so `uid` above is usable anywhere a raw column
+would be. `expr` uses the same restricted, non-`eval`ed grammar `weight`/`weight_start`
+do (see [Weights, parameters, and expressions](#weights-parameters-and-expressions)),
+extended to allow string literals and string-valued columns: `*` is Julia's own
+string-concatenation operator, so `county * "_" * prec_id` reads as ordinary Julia.
+A numeric derivation works the same way — `pop_col = "adj_pop"` with
+`adj_pop = "pop2020cen - prison_pop"` computes an adjusted population column (e.g. for
+prison-population reallocation) instead of a name.
+
+Rules:
+- Every operand of one expression must be the same kind of column (all string, or all
+  number) — Julia's own `+ - * / ^` don't implicitly convert between them, so
+  `county * 5` fails exactly the way it would in a Julia session, not as a special case.
+- An expression may only reference **raw** columns, not another `[plans.derive]` entry —
+  each entry is evaluated independently, so a name depending on another would otherwise
+  depend on undefined table-iteration order rather than something you chose.
+- A derived name colliding with an existing column (raw, or an earlier derived one) is
+  refused rather than silently overwritten.
+
+See `examples/toml/param_nc.toml` for a complete, runnable example.
 
 ### `[mcmc]` — how long, and which moves
 
@@ -301,6 +341,13 @@ what was refused, as is a result that is not finite.
 
 Write the weight as a parameter name whenever you intend to sweep it: `--gamma 0.5`
 changes the *parameter*, so an energy whose weight is the literal `1.0` will not move.
+
+The same grammar, extended to allow string literals and string-valued columns, powers
+[`[plans.derive]`](#plansderive--computing-a-column-from-other-columns): weight
+expressions reference `[measure]` parameters and produce a number, while
+`[plans.derive]` expressions reference node columns and may produce either a number or
+a string. `evaluate_column_expression` is the derived-column counterpart of the weight
+expression evaluator used here.
 
 ## The output file and its name
 
@@ -481,6 +528,10 @@ exactly as a fresh run's initial partition is.
 | `--set … the config has no [t] table` | Mistyped table name. |
 | `--gamma and --set measure.gamma both set the same value` | One or the other. |
 | `AssertionError: 0 ≤ two_cycle_walk_frac ≤ 1` | Exactly that. |
+| `derived column "x" is not a string` / `derived column "x"'s expression … is not a string` | A `[plans.derive]` entry's name or expression isn't a TOML string. |
+| `derived column "x" collides with a column already on the graph …` | The name is already a raw column, or an earlier `[plans.derive]` entry in the same run. Pick a different name. |
+| `the expression "…" refers to "z", which is not a known column` | A `[plans.derive]` expression names a column that isn't one of the graph's raw columns — remember derived expressions can't reference each other, only raw columns. |
+| `column "z" is …, neither a number nor a string` | A `[plans.derive]` expression referenced a raw column whose value isn't numeric or string-valued. |
 
 ## See also
 

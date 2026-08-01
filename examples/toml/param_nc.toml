@@ -1,0 +1,51 @@
+# North Carolina congressional plans (14 districts), sampled by the Metropolized
+# Cycle Walk. Demonstrates [plans.derive] (docs/run_cyclewalk_toml.md): NC's raw
+# precinct-id column ("prec_id") is NOT unique across counties (see
+# https://quantifyinggerrymandering.pages.oit.duke.edu/codedoc/geographic.html), so
+# geo_units names a derived column joining it with "county" instead of a raw one.
+#   julia --project=. run_cyclewalk_toml.jl toml/param_nc.toml
+# Every key is documented in ../../docs/run_cyclewalk_toml.md
+
+[plans]
+pop_dev = 0.02
+num_dists = 14
+node_data = ["county", "prec_id", "pop2020cen", "area", "border_length"]
+geo_units = ["uid"]
+pop_col = "pop2020cen"
+area_col = "area"
+node_border_col = "border_length"
+edge_perimeter_col = "length"
+map_directory = ["data", "nc"]
+map_file = "NC_pct21.json"
+
+[plans.derive]
+# prec_id alone repeats across counties; county * "_" * prec_id is unique per node.
+# "*" is Julia's own string-concatenation operator, so this is the same expression
+# grammar `weight`/`weight_start` use below, just producing a string instead of a
+# number (see evaluate_column_expression in docs/run_cyclewalk_toml.md).
+uid = "county * \"_\" * prec_id"
+
+[mcmc]
+cycle_walk_steps = 1e4
+two_cycle_walk_frac = 0.1
+
+[measure]
+gamma = 0.0
+iso_weight = 0.0
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+
+[run]
+thread_id = 1
+atlasNameBase = "nc_cycleWalk"
+outputDirectory = ["output", "nc"]
+cycle_walk_out_freq = 100
+writer_stats = ["get_isoperimetric_scores", "get_log_spanning_trees"]
+compress = "gz"
+run_diagnostics = false
