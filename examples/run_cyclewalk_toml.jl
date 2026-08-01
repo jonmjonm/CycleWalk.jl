@@ -23,8 +23,14 @@ blas_threads > 0 && BLAS.set_num_threads(blas_threads)
 
 
 base_graph = BaseGraph(pctGraphPath, pop_col, inc_node_data=node_data,
-                       area_col=area_col, node_border_col=node_border_col, 
+                       area_col=area_col, node_border_col=node_border_col,
                        edge_perimeter_col=edge_perimeter_col)
+# [plans.derive]: named columns computed from existing ones (e.g. a unique node name
+# joined from columns that aren't unique alone) — see docs/run_cyclewalk_toml.md.
+# Must run before `Graph` below, since geo_units/pop_col/etc. can name a derived
+# column, and by the time anything looks a column up it has to already exist.
+haskey(params["plans"], "derive") &&
+    derive_node_columns!(base_graph, params["plans"]["derive"])
 graph = Graph(base_graph, geo_units)
 
 constraints = initialize_constraints()

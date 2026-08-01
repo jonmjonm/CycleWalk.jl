@@ -713,4 +713,48 @@ bump_probe(args...) = (EXPRESSION_PROBE[] += 1; 1.0)
         @test f(0.0) == 1.0
         @test_throws ArgumentError f(1.0)
     end
+
+    @testset "evaluate_column_expression: strings and numbers, same grammar" begin
+        cols = Dict{String, Any}("county" => "FAIRFIELD", "prec_id" => "01",
+                                 "pop" => 3077, "prison_pop" => 50)
+
+        @test evaluate_column_expression("county", cols) == "FAIRFIELD"
+        @test evaluate_column_expression("county * \"_\" * prec_id", cols) ==
+              "FAIRFIELD_01"
+        @test evaluate_column_expression("\"prefix_\" * county", cols) ==
+              "prefix_FAIRFIELD"
+        @test evaluate_column_expression("pop - prison_pop", cols) === 3027.0
+        @test evaluate_column_expression("pop", cols) === 3077.0   # coerced to Float64
+
+        # weight expressions still refuse string literals — allow_strings is opt-in
+        @test_throws ArgumentError evaluate_weight_expression("\"x\"", knobs)
+
+        # mixed-type operands fail exactly the way they would in a Julia REPL:
+        # no method, not a special-cased error
+        err = try evaluate_column_expression("county * 5", cols); nothing
+              catch e; e end
+        @test err isa ArgumentError
+        @test occursin("applies \"*\"", err.msg)
+        @test_throws ArgumentError evaluate_column_expression("county + prec_id", cols)
+
+        # unknown column names the columns that do exist, like an unknown parameter
+        err2 = try evaluate_column_expression("cnty", cols); nothing catch e; e end
+        @test err2 isa ArgumentError
+        @test occursin("cnty", err2.msg)
+        @test occursin("county", err2.msg)
+
+        # a column value that is neither string nor number is refused by name
+        bad_cols = Dict{String, Any}("x" => [1, 2, 3])
+        err3 = try evaluate_column_expression("x", bad_cols); nothing catch e; e end
+        @test err3 isa ArgumentError
+        @test occursin("\"x\"", err3.msg)
+
+        # everything evaluate_weight_expression refuses, evaluate_column_expression
+        # still refuses too (function calls, statements, indexing, …) — allow_strings
+        # only adds string literals, nothing else
+        for bad in ["run(`ls`)", "sqrt(pop)", "x[1]", "1+2; run(`ls`)",
+                    "pop == 1", "@eval 1"]
+            @test_throws ArgumentError evaluate_column_expression(bad, cols)
+        end
+    end
 end

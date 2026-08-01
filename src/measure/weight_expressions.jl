@@ -134,6 +134,68 @@ function weight_path_closure(expr::AbstractString, parameters::AbstractDict)
 end
 
 """
+    evaluate_column_expression(expr, columns) -> Union{Float64, String}
+
+Evaluate `expr` — the same restricted grammar as [`evaluate_weight_expression`](@ref)
+(`+ - * / ^`, parsed and *interpreted*, never `eval`ed) — over one node's own
+attributes, `columns` (e.g. `graph.node_attributes[ni]`), and return whichever type
+the expression naturally produces: a `String` (e.g. `county * "_" * prec_id`,
+joining two string-valued columns) or a `Float64` (e.g. `pop2020cen - prison_pop`).
+
+Unlike a weight expression, string literals ARE permitted here — `"_"` above is one
+— since composing names out of literal separators is the point. `*` is Julia's own
+string-concatenation operator, so `"a" * "b"` works for the same reason it does in a
+Julia REPL; mixing types (`"a" * 5`) fails the same way it would there too (no
+`*(::String, ::Int)` method), which is why every operand of one expression has to be
+the same kind of column — there is no implicit `string(...)` conversion in this
+grammar.
+
+Used to build derived node columns (see `derive_node_columns!` in
+`graph/derived_columns.jl`) — e.g. a unique node name joined from columns that
+aren't unique alone, or a population column adjusted by another (prison
+reallocation, say). Every raw column value must be a `String` or `Real`; anything
+else (e.g. a name resolving to `missing` or a nested structure) is refused with a
+message naming the offending column, the same way an unknown parameter is refused.
+"""
+function evaluate_column_expression(
+    expr::AbstractString,
+    columns::AbstractDict
+)::Union{Float64, String}
+    ast = try
+        Meta.parse(strip(expr))
+    catch err
+        throw(ArgumentError("could not parse the expression \"$expr\""))
+    end
+    counter = Ref(0)
+    value = _walk_weight_ast(ast, expr, 1, counter; allow_strings=true) do name
+        if !haskey(columns, name)
+            known = join(sort!(collect(String.(keys(columns)))), ", ")
+            throw(ArgumentError("the expression \"$expr\" refers to \"$name\", which " *
+                                "is not a known column (known: $known)"))
+        end
+        value = columns[name]
+        if value isa Real && !(value isa Bool)
+            float(value)
+        elseif value isa AbstractString
+            String(value)
+        else
+            throw(ArgumentError("column \"$name\" is $(repr(value)), neither a " *
+                                "number nor a string"))
+        end
+    end
+    if value isa Real && !(value isa Bool)
+        isfinite(value) ||
+            throw(ArgumentError("the expression \"$expr\" evaluates to $value, " *
+                                "which is not a usable column value"))
+        return Float64(value)
+    elseif value isa AbstractString
+        return String(value)
+    end
+    throw(ArgumentError("the expression \"$expr\" evaluates to $(repr(value)), " *
+                        "which is not a usable column value"))
+end
+
+"""
     weight_expression_parameters(expr) -> Vector{String}
 
 The names a weight expression reads, sorted and without repeats:
@@ -166,12 +228,16 @@ end
 # Julia syntax cannot quietly become permissible. Evaluating and collecting names are
 # the same traversal with different `at_symbol`s, which is what keeps the two from
 # ever disagreeing about what an expression is allowed to contain.
+#
+# `allow_strings` is off by default (weight expressions must be numbers); pass it on
+# for `evaluate_column_expression`, whose whole point is composing strings.
 function _walk_weight_ast(
     at_symbol::Function,
     node,
     src::AbstractString,
     depth::Int,
-    counter::Ref{Int}
+    counter::Ref{Int};
+    allow_strings::Bool=false
 )
     depth > MAX_WEIGHT_EXPRESSION_DEPTH &&
         throw(ArgumentError("the expression \"$src\" nests deeper than " *
@@ -186,6 +252,8 @@ function _walk_weight_ast(
         throw(ArgumentError("the expression \"$src\" uses a boolean"))
     elseif node isa Real
         return float(node)
+    elseif allow_strings && node isa AbstractString
+        return String(node)
     elseif node isa Symbol
         return at_symbol(String(node))
     elseif node isa Expr && node.head === :call
@@ -195,7 +263,8 @@ function _walk_weight_ast(
         (op isa Symbol && haskey(WEIGHT_EXPRESSION_OPS, op)) ||
             throw(ArgumentError("the expression \"$src\" uses \"$op\", which is not " *
                                 "allowed (only + - * / ^)"))
-        args = [_walk_weight_ast(at_symbol, a, src, depth+1, counter)
+        args = [_walk_weight_ast(at_symbol, a, src, depth+1, counter;
+                                 allow_strings=allow_strings)
                 for a in node.args[2:end]]
         return try
             WEIGHT_EXPRESSION_OPS[op](args...)
@@ -204,7 +273,8 @@ function _walk_weight_ast(
                                 "$(length(args)) arguments"))
         end
     else
-        # :toplevel (a second statement), :ref, :., :(=), :macrocall, strings, …
+        # :toplevel (a second statement), :ref, :., :(=), :macrocall, strings
+        # (unless allow_strings), …
         what = node isa Expr ? string(node.head) : string(typeof(node))
         throw(ArgumentError("the expression \"$src\" contains $what, which is not " *
                             "allowed (only arithmetic over named parameters)"))

@@ -151,6 +151,8 @@ export AbstractGraph,
     evaluate_weight_expression,
     weight_expression_parameters,
     weight_path_closure,
+    evaluate_column_expression,
+    derive_node_columns!,
     EnergySpec,
     energy_specs,
     measure_parameters,
@@ -219,6 +221,7 @@ include("./auxilary/SimpleWeightedGraphs_BugFixes.jl")
 include("./utilities/array_utils.jl")
 
 include("./graph/graph.jl")
+include("./graph/derived_columns.jl")
 include("./trees/neighbor_list_tree.jl")
 include("./trees/tree.jl")
 include("./trees/tree_metrics.jl")
