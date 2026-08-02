@@ -3,7 +3,7 @@
                              writer=nothing, output_freq=250,
                              run_diagnostics=RunDiagnostics(),
                              prestepf=(x...)->nothing, prestepargs=(),
-                             output_initial=true, sample_hook=nothing, weight=1)
+                             output_initial=true, sample_data_hook=nothing, weight=1)
 
 Run the Metropolis–Hastings sampler in place on `partition`. Each step draws a
 proposal (a single closure, or one sampled from a weighted mixture whose weights must
@@ -18,10 +18,12 @@ accumulate the log importance weight. `weight` is recorded as each output map's
 sampling weight; passing a [`MutableFloat`](@ref) lets `prestepf` update it as the
 run progresses.
 
-When supplied, `sample_hook(partition, step)` is called immediately after every
-regular `output_freq` sample is written. It is not called for the optional initial
-output. This supports streaming, in-process diagnostic accumulation without reading
-the Atlas back from disk.
+When supplied, `sample_data_hook(data, step)` is called immediately after every
+regular `output_freq` sample is written. `data` is the Atlas map's already-computed
+observable dictionary, keyed by the descriptions given to `push_writer!`; it excludes
+the map name, weight, and district assignment. The dictionary is a reusable Writer
+buffer and must not be mutated or retained. The hook is not called for the optional
+initial output, nor when `writer=nothing`.
 """
 function run_metropolis_hastings!(
     partition::LinkCutPartition,
@@ -35,7 +37,7 @@ function run_metropolis_hastings!(
     prestepf::Function=(x...)->nothing,
     prestepargs::Tuple=(),
     output_initial::Bool=true,
-    sample_hook::Union{Nothing, Function}=nothing,
+    sample_data_hook::Union{Nothing, Function}=nothing,
     weight::Union{Real, MutableFloat}=1,
     seed=nothing
 ) where T <: Real
@@ -64,9 +66,10 @@ function run_metropolis_hastings!(
         p, update = proposal!(partition, rng, diagnostics=proposal_diagnostics)
         if p == 0
             if mod(step, output_freq) == 0 && step != initial_step
-                output(partition, measure, step, 0, writer, run_diagnostics;
-                       weight=weight)
-                sample_hook !== nothing && sample_hook(partition, step)
+                map = output(partition, measure, step, 0, writer, run_diagnostics;
+                             weight=weight)
+                sample_data_hook !== nothing && map !== nothing &&
+                    sample_data_hook(map.data, step)
             end
             continue
         end
@@ -78,9 +81,10 @@ function run_metropolis_hastings!(
             update_partition!(partition, update)
         end
         if mod(step, output_freq) == 0
-            output(partition, measure, step, 0, writer, run_diagnostics;
-                   weight=weight)
-            sample_hook !== nothing && sample_hook(partition, step)
+            map = output(partition, measure, step, 0, writer, run_diagnostics;
+                         weight=weight)
+            sample_data_hook !== nothing && map !== nothing &&
+                sample_data_hook(map.data, step)
         end
     end
 end

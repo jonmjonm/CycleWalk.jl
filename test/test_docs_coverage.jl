@@ -41,9 +41,20 @@ end
     partition = LinkCutPartition(small_square_graph, constraints, 4; rng=rng)
     proposal = build_one_tree_cycle_walk(constraints)
     observed_steps = Int[]
-    run_metropolis_hastings!(partition, proposal, Measure(), 25, rng;
-                             output_freq=5, output_initial=false,
-                             sample_hook=(_, step) -> push!(observed_steps, step))
+    mktempdir() do tmpdir
+        writer = Writer(Measure(), constraints, partition, joinpath(tmpdir, "hook.jsonl.gz"))
+        push_writer!(writer, get_isoperimetric_scores)
+        try
+            run_metropolis_hastings!(partition, proposal, Measure(), 25, rng;
+                                     writer=writer, output_freq=5, output_initial=false,
+                                     sample_data_hook=(data, step) -> begin
+                                         @test haskey(data, "get_isoperimetric_scores")
+                                         push!(observed_steps, step)
+                                     end)
+        finally
+            close_writer(writer)
+        end
+    end
     @test observed_steps == [5, 10, 15, 20, 25]
 end
 
