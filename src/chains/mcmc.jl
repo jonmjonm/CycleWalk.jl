@@ -3,7 +3,7 @@
                              writer=nothing, output_freq=250,
                              run_diagnostics=RunDiagnostics(),
                              prestepf=(x...)->nothing, prestepargs=(),
-                             output_initial=true, weight=1)
+                             output_initial=true, sample_hook=nothing, weight=1)
 
 Run the Metropolis–Hastings sampler in place on `partition`. Each step draws a
 proposal (a single closure, or one sampled from a weighted mixture whose weights must
@@ -17,6 +17,11 @@ each proposal — annealed importance sampling uses it to anneal `measure` and
 accumulate the log importance weight. `weight` is recorded as each output map's
 sampling weight; passing a [`MutableFloat`](@ref) lets `prestepf` update it as the
 run progresses.
+
+When supplied, `sample_hook(partition, step)` is called immediately after every
+regular `output_freq` sample is written. It is not called for the optional initial
+output. This supports streaming, in-process diagnostic accumulation without reading
+the Atlas back from disk.
 """
 function run_metropolis_hastings!(
     partition::LinkCutPartition,
@@ -30,6 +35,7 @@ function run_metropolis_hastings!(
     prestepf::Function=(x...)->nothing,
     prestepargs::Tuple=(),
     output_initial::Bool=true,
+    sample_hook::Union{Nothing, Function}=nothing,
     weight::Union{Real, MutableFloat}=1,
     seed=nothing
 ) where T <: Real
@@ -60,6 +66,7 @@ function run_metropolis_hastings!(
             if mod(step, output_freq) == 0 && step != initial_step
                 output(partition, measure, step, 0, writer, run_diagnostics;
                        weight=weight)
+                sample_hook !== nothing && sample_hook(partition, step)
             end
             continue
         end
@@ -73,6 +80,7 @@ function run_metropolis_hastings!(
         if mod(step, output_freq) == 0
             output(partition, measure, step, 0, writer, run_diagnostics;
                    weight=weight)
+            sample_hook !== nothing && sample_hook(partition, step)
         end
     end
 end
@@ -231,4 +239,3 @@ function post_step!(
     #     @show desc, report_func∈measure.scores, report_func
     # end
 end
-

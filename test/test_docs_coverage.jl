@@ -34,6 +34,19 @@ end
     @test partition.num_dists == 4
 end
 
+@testset "MCMC sample hook follows regular output cadence" begin
+    rng = PCG.PCGStateOneseq(UInt64, 33334)
+    constraints = initialize_constraints()
+    add_constraint!(constraints, PopulationConstraint(4, 4))
+    partition = LinkCutPartition(small_square_graph, constraints, 4; rng=rng)
+    proposal = build_one_tree_cycle_walk(constraints)
+    observed_steps = Int[]
+    run_metropolis_hastings!(partition, proposal, Measure(), 25, rng;
+                             output_freq=5, output_initial=false,
+                             sample_hook=(_, step) -> push!(observed_steps, step))
+    @test observed_steps == [5, 10, 15, 20, 25]
+end
+
 @testset "Two-tree cycle walk proposal" begin
     rng = PCG.PCGStateOneseq(UInt64, 22222)
     constraints = initialize_constraints()
