@@ -658,4 +658,5 @@ function output(
         @assert false
     end
     reset_diagnostics!(run_diagnostics)
+    return map
 end

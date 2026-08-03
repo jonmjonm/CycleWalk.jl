@@ -1,6 +1,6 @@
 name = "CycleWalk"
 uuid = "ac9cec89-1413-42d8-a7d6-c246d938c565"
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Jonathan Mattingly <jonathan.mattingly@duke.edu>", "Gregory Herschlag <Gregory.Herschlag@duke.edu>"]
 
 [deps]

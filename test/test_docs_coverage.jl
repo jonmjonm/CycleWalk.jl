@@ -34,6 +34,30 @@ end
     @test partition.num_dists == 4
 end
 
+@testset "MCMC sample hook follows regular output cadence" begin
+    rng = PCG.PCGStateOneseq(UInt64, 33334)
+    constraints = initialize_constraints()
+    add_constraint!(constraints, PopulationConstraint(4, 4))
+    partition = LinkCutPartition(small_square_graph, constraints, 4; rng=rng)
+    proposal = build_one_tree_cycle_walk(constraints)
+    observed_steps = Int[]
+    mktempdir() do tmpdir
+        writer = Writer(Measure(), constraints, partition, joinpath(tmpdir, "hook.jsonl.gz"))
+        push_writer!(writer, get_isoperimetric_scores)
+        try
+            run_metropolis_hastings!(partition, proposal, Measure(), 25, rng;
+                                     writer=writer, output_freq=5, output_initial=false,
+                                     sample_data_hook=(data, step) -> begin
+                                         @test haskey(data, "get_isoperimetric_scores")
+                                         push!(observed_steps, step)
+                                     end)
+        finally
+            close_writer(writer)
+        end
+    end
+    @test observed_steps == [5, 10, 15, 20, 25]
+end
+
 @testset "Two-tree cycle walk proposal" begin
     rng = PCG.PCGStateOneseq(UInt64, 22222)
     constraints = initialize_constraints()
