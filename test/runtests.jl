@@ -79,6 +79,7 @@ include(joinpath(testdir, "test_docs_coverage.jl"))
 end
 
 tests = [
+    "graph_weighted_initializer",
     "small_square_p88_unweighted",
     "small_square_p88_weighted",
     "small_square_p88_polsby_popper",
