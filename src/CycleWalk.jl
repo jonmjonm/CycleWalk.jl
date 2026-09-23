@@ -50,6 +50,9 @@ using MetropolizedForestRecom:
     MultiLevelSubGraph,
     MultiLevelPartition,
     Partition,
+    AbstractInitializer,
+    UniformInitializer,
+    GraphWeightedInitializer,
     AbstractConstraint,
     PopulationConstraint,
     PackNodeConstraint,
@@ -75,6 +78,11 @@ export AbstractGraph,
     edge_weight,
     build_graph,
     multi_level_graph,
+
+    # initializers
+    AbstractInitializer,
+    UniformInitializer,
+    GraphWeightedInitializer,
 
     # proposals
     build_one_tree_cycle_walk,

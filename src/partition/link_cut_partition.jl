@@ -142,12 +142,18 @@ function LinkCutPartition(
     constraints::Constraints,
     num_dists::U;
     rng::AbstractRNG=PCG.PCGStateOneseq(UInt64),
-    verbose::Bool=false
+    verbose::Bool=false,
+    initializer::AbstractInitializer=UniformInitializer(),
 ) where U <: Int
     mfr_constraints, levels = interpret_constraints(constraints, graph)
     ml_graph = multi_level_graph(graph.graphs_by_level[end], levels)
-    partition = MultiLevelPartition(ml_graph, mfr_constraints, num_dists; 
-                                    rng=rng);
+    partition = MultiLevelPartition(
+        ml_graph,
+        mfr_constraints,
+        num_dists;
+        rng=rng,
+        initializer=initializer,
+    )
     node_to_dist = flatten_assignment(partition)
     partition = MultiLevelPartition(graph, node_to_dist)
 
@@ -562,7 +568,6 @@ function get_center_leaves_moments(partition::LinkCutPartition;p=1)
     return center_moments
 
 end
-
 
 
 
