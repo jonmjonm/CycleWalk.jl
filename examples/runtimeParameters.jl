@@ -1,11 +1,22 @@
 ## loads command line parameters
 ## These override the values in the TOML config file
+## Everything downstream of the (overridden) TOML is computed by `derive_params` in
+## parameterUtils.jl, which run_cyclewalk_extend.jl shares.
+
+include("parameterUtils.jl") # derive_params / print_params / parameter_tag / --set
+
+# `--set <table>.<key>=<value>` is repeatable, which ArgMacros has no macro for, so
+# these are lifted out of ARGS before the declared flags are parsed. Doing it here
+# means a new config key never needs a line added to this file to be swept.
+cli_overrides = take_set_overrides!(ARGS)
+overwrite_output = take_flag!(ARGS, "--overwrite")
+
 args = @dictarguments begin
     @argumentoptional Int thread_id "--thread_id"
     @argumentoptional Number two_cycle_walk_frac "--two_cycle_walk_frac" "-f"
     @argumentoptional Number cycle_walk_steps "--cycle_walk_steps" "-s"
-    @argumentoptional Number gamma "--gamma" 
-    @argumentoptional Number iso_weight "--iso_weight" 
+    @argumentoptional Number gamma "--gamma"
+    @argumentoptional Number iso_weight "--iso_weight"
     @argumentoptional Int num_dists "--num_dists" "-n"
     @argumentoptional Number pop_dev "--pop_dev" "-p"
     @argumentoptional Bool run_diagnostics "--run_diagnostics" "-d"
@@ -21,60 +32,38 @@ params=TOML.parsefile(toml_config_file) # parse TOML config file
 params["run"]["thread_id"]= args[:thread_id]!=nothing ? args[:thread_id] : params["run"]["thread_id"]
 params["mcmc"]["two_cycle_walk_frac"]= args[:two_cycle_walk_frac]!=nothing ?  args[:two_cycle_walk_frac] : params["mcmc"]["two_cycle_walk_frac"]
 params["mcmc"]["cycle_walk_steps"]= args[:cycle_walk_steps]!=nothing ?  args[:cycle_walk_steps] : params["mcmc"]["cycle_walk_steps"]
-params["measure"]["gamma"]= args[:gamma]!=nothing ? args[:gamma] : params["measure"]["gamma"]
-params["measure"]["iso_weight"]= args[:iso_weight]!=nothing ? args[:iso_weight] : params["measure"]["iso_weight"]
+params["measure"]["gamma"]= args[:gamma]!=nothing ? args[:gamma] : get(params["measure"], "gamma", 0.0)
+params["measure"]["iso_weight"]= args[:iso_weight]!=nothing ? args[:iso_weight] : get(params["measure"], "iso_weight", 0.0)
 params["plans"]["pop_dev"]= args[:pop_dev]!=nothing ? args[:pop_dev] : params["plans"]["pop_dev"]
 params["plans"]["num_dists"]= args[:num_dists]!=nothing ? args[:num_dists] : params["plans"]["num_dists"]
 params["run"]["run_diagnostics"]= args[:run_diagnostics]!=nothing ? args[:run_diagnostics] : params["run"]["run_diagnostics"]
 
+# ...then the generic overrides, which reach keys no flag above names. A key a flag
+# also set is an error rather than a silent winner: a run whose gamma has two answers
+# should not pick one.
+apply_set_overrides!(params, cli_overrides;
+                     named_flags=Dict("measure.gamma"          => (args[:gamma], "--gamma"),
+                                      "measure.iso_weight"     => (args[:iso_weight], "--iso_weight"),
+                                      "run.thread_id"          => (args[:thread_id], "--thread_id"),
+                                      "mcmc.two_cycle_walk_frac" => (args[:two_cycle_walk_frac], "--two_cycle_walk_frac"),
+                                      "mcmc.cycle_walk_steps"  => (args[:cycle_walk_steps], "--cycle_walk_steps"),
+                                      "plans.num_dists"        => (args[:num_dists], "--num_dists"),
+                                      "plans.pop_dev"          => (args[:pop_dev], "--pop_dev"),
+                                      "run.run_diagnostics"    => (args[:run_diagnostics], "--run_diagnostics")))
 
-#load parameters from updated TOML dictionary 
-@unpack gamma,iso_weight = params["measure"]
-@unpack cycle_walk_steps, two_cycle_walk_frac = params["mcmc"]
-@unpack outputDirectory,atlasNameBase = params["run"]
-@unpack thread_id = params["run"]
-@unpack cycle_walk_out_freq = params["run"]
-@unpack map_directory,map_file = params["plans"]
-@unpack num_dists,pop_dev=params["plans"]
-@unpack node_data,pop_col,geo_units=params["plans"]
+derived_params = derive_params(params, toml_config_file;
+                               cli_overrides=cli_overrides)
+ensure_writable(derived_params.output_file_path, derived_params.io_mode;
+                overwrite=overwrite_output)
 
+@unpack gamma, iso_weight, cycle_walk_steps, two_cycle_walk_frac,
+        outputDirectory, atlasNameBase, thread_id, cycle_walk_out_freq,
+        map_directory, map_file, num_dists, pop_dev, node_data, pop_col,
+        geo_units, measure_scores, measure_specs, measure_params, writer_stats,
+        area_col, node_border_col,
+        edge_perimeter_col, compress, output_districting, io_mode,
+        description, rng_seed_base, blas_threads,
+        rng_seed, steps, outfreq, atlasName, output_file_path, pctGraphPath,
+        ad_param = derived_params
 
-# load optional parameters from updated TOML dictionary 
-measure_scores =   "measure_scores" in  keys(params["measure"]) ? params["measure"]["measure_scores"] : []  
-writer_stats =  "writer_stats" in  keys(params["plans"]) ? params["plans"]["writer_stats"] : []
-area_col= "area_col" in keys(params["plans"]) ? params["plans"]["area_col"] : nothing 
-node_border_col= "node_border_col" in keys(params["plans"]) ? params["plans"]["node_border_col"] : nothing 
-edge_perimeter_col= "edge_perimeter_col" in keys(params["plans"]) ? params["plans"]["edge_perimeter_col"] : nothing 
-compress= "compress" in keys(params["run"]) ? "."*params["run"]["compress"] : "" 
-
-node_data=Set(node_data) # change from vector to Set
-@assert 0 ≤ two_cycle_walk_frac ≤ 1
-
-
-rng_seed = 454190 + 15123*thread_id
-#set number of total steps needed to have correct expected number of cycle_wak_steps
-steps = Int(ceil(cycle_walk_steps/two_cycle_walk_frac))  
-outfreq = Int(floor(cycle_walk_out_freq/two_cycle_walk_frac))
-
-
-#data to be added to atlas header
-ad_param = Dict{String, Any}(
-    "popdev" => pop_dev
-)
-
-atlasName = atlasNameBase*"_thread"*string(thread_id)
-atlasName *= "_cyclewalkVS_2treeCycleWalk_"*string(two_cycle_walk_frac)
-if gamma > 0; atlasName *="_gamma"*string(gamma) end
-if iso_weight > 0; atlasName *="_iso"*string(iso_weight) end
-atlasName *= ".jsonl"*compress
-output_file_path = joinpath(outputDirectory... , atlasName)
-
-@show thread_id
-@show steps, outfreq
-@show two_cycle_walk_frac,cycle_walk_steps
-@show num_dists,pop_dev
-@show atlasName
-@show node_data
-
-pctGraphPath = joinpath(map_directory... , map_file)
-@show pctGraphPath
+print_params(derived_params)

@@ -656,9 +656,9 @@ function build_lifted_tree_cycle_walk(
 )
     f(p::LinkCutPartition, 
       r::AbstractRNG; 
-      diagnostics::Union{Nothing, ProposalDiagnostics}=nothing) = 
+      diagnostics::Union{Nothing, ProposalDiagnostics}=nothing) =
         lifted_tree_cycle_walk!(p, constraints, r; diagnostics=diagnostics)
-    return f
+    return name_proposal!(f, "two_tree_cycle_walk")
 end
 
 const build_cycle_walk = build_lifted_tree_cycle_walk

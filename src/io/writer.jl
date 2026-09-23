@@ -1,6 +1,49 @@
 
-AtlasParam=Dict{String, Any}
+# AtlasParam is insertion-ordered (OrderedDict) so the header's third line
+# serializes its keys in a stable, deterministic order. This lets execution
+# metadata such as the full "script" blob be appended last (see
+# [`stamp_execution_metadata!`](@ref) and [`write_header!`](@ref)). MapParam stays a
+# plain Dict; per-map key order is irrelevant.
+AtlasParam=OrderedDict{String, Any}
 MapParam=Dict{String, Any}
+
+"""
+    MAX_INCLUDE_BYTES
+
+Default cap on how much `include`d source is embedded in an Atlas header (see
+[`collect_included_sources`](@ref)). The header is a single JSON line that every
+reader of the file parses, so a runner script that `include`s something large must
+not bloat every atlas it writes; source past this budget is listed by name under
+`"script_includes_skipped"` instead. Override per run with the `max_include_bytes`
+argument of [`Writer`](@ref).
+"""
+const MAX_INCLUDE_BYTES = 1_000_000
+
+"""
+    MAX_INCLUDE_DEPTH
+
+Default cap on how deep a chain of `include`s is followed when embedding a script's
+sources in an Atlas header (see [`collect_included_sources`](@ref)).
+"""
+const MAX_INCLUDE_DEPTH = 8
+
+"""
+    PathRecorder(desc, kind, f)
+
+One entry of a [`Writer`](@ref)'s annealing-path recorder list (see
+[`push_path_writer!`](@ref)). During annealed importance sampling, every `path_stride`
+steps its value is appended to the sample's path buffer under key `desc`. `kind` is one
+of the built-in symbols `:log_weight` (running cumulative log importance weight),
+`:delta_log_weight` (that step's increment), `:schedule_frac` (`cur_step/total_steps`),
+or `:observable`, in which case `f(partition)` is evaluated on the intermediate
+annealing partition. Only registered recorders are ever evaluated, so recording adds no
+cost when none are registered.
+"""
+struct PathRecorder
+    desc::String
+    kind::Symbol
+    f::Union{Function, Nothing}
+end
 
 """
     Writer
@@ -11,6 +54,17 @@ handle; `map_output_data` maps each registered observable's description to its g
 (see [`push_writer!`](@ref)); `map_param` buffers the current step's observable
 values; `output_districting` selects whether each map records the full node→district
 assignment; `node_map`/`node_field` describe how nodes are keyed in the output.
+`path_recorders`/`path_target_points` configure per-sample annealing-path recording for
+annealed importance sampling (see [`push_path_writer!`](@ref)); an empty
+`path_recorders` (the default) records nothing and adds no cost. `script_text` holds the
+executing script's source (see [`stamp_execution_metadata!`](@ref)), deferred so
+[`write_header!`](@ref) can append it as the header's last key, or `nothing` when script
+embedding is disabled or no script is running. `include_data` holds the sources of the
+files that script `include`s (see [`collect_included_sources`](@ref)), deferred the same
+way and written just after `script_text`. `config_text` holds the raw contents of a
+run's TOML config file (see the `config_file` argument of [`Writer`](@ref)), deferred so
+[`write_header!`](@ref) can append it as the header's very last key (after `script`), or
+`nothing` when no config file was given.
 """
 mutable struct Writer
     atlas::Atlas{AtlasParam}
@@ -19,18 +73,48 @@ mutable struct Writer
     output_districting::Bool
     node_map::Dict{Tuple{Vararg{String}}, Int}
     node_field::String
+    path_recorders::Vector{PathRecorder}
+    path_target_points::Int
+    header_written::Bool
+    script_text::Union{String, Nothing}
+    include_data::Union{OrderedDict{String, Any}, Nothing}
+    config_text::Union{String, Nothing}
 end
 
 """
     Writer(measure, constraints, partition, output_file_path; output_districting=true,
            description="", time_stamp=string(Dates.now()), io_mode="w",
-           additional_parameters=Dict{String,Any}())
+           additional_parameters=Dict{String,Any}(), weight_type=Int64,
+           write_header=true, max_include_bytes=MAX_INCLUDE_BYTES)
 
 Open `output_file_path` (`.jsonl` or `.jsonl.gz`) and write the Atlas header,
 recording the measure's energies and weights, the population bounds and constraint
 descriptions, the CycleWalk package version, and any `additional_parameters`. Creates
 the output directory if needed. Register observables with [`push_writer!`](@ref) and
-close with [`close_writer`](@ref).
+close with [`close_writer`](@ref). `weight_type` is the type of each map's sampling
+weight, recorded in the Atlas header: the default `Int64` suits ordinary MCMC runs
+(every map has weight 1); pass `Float64` when maps carry real-valued weights, as in
+[`run_annealed_importance_sampling!`](@ref).
+
+Execution metadata is also stamped automatically (see
+[`stamp_execution_metadata!`](@ref)): the running `"user"`, the `"julia_version"`, the
+`"script_name"`, and — when `include_script=true` (the default) — the full source of the
+executing script under `"script"`, followed by the sources of every file it `include`s
+under `"script_includes"`. Pass `include_script=false` to omit both, or lower
+`max_include_bytes` to cap how much included source is embedded.
+
+If `config_file` names an existing file, its full contents are read and appended, under
+`"toml_config"`, as the header's very last key — after `"script"` — so it can never be
+overwritten by other header data. If `config_file` is `nothing` or does not point to an
+existing file, this is silently skipped.
+
+Pass `write_header=false` when appending maps to an Atlas that already carries a header
+(`io_mode="a"`): the header is then treated as already present and none is emitted, so
+the appended maps continue the existing file rather than embedding a second header
+block in its middle. The `atlasParam` assembled here is still built (and reachable as
+`writer.atlas.atlasParam`) but never reaches disk, so a run that appends cannot record
+anything about itself in the file's header — see `examples/run_cyclewalk_extend.jl`,
+which writes a sidecar lineage file in that mode.
 """
 function Writer(
     measure::Measure,
@@ -41,7 +125,13 @@ function Writer(
     description::String="",
     time_stamp=string(Dates.now()),
     io_mode::String="w",
-    additional_parameters::Dict{String, Any}=Dict{String,Any}()
+    additional_parameters::Dict{String, Any}=Dict{String,Any}(),
+    weight_type::DataType=Int64,
+    path_target_points::Int=50,
+    include_script::Bool=true,
+    config_file::Union{String, Nothing}=nothing,
+    write_header::Bool=true,
+    max_include_bytes::Int=MAX_INCLUDE_BYTES
     # proposal_diagnostics::Dict=Dict()
 )
     graph = partition.graph
@@ -80,17 +170,284 @@ function Writer(
         mkpath(dir)
     end
 
-    atlasHeader = AtlasHeader(description, time_stamp, AtlasParam, MapParam)
+    # The Atlas header (the file's first three lines) is NOT written here: it is
+    # deferred to `write_header!` so that a `run_*!` sampler can stamp its run
+    # metadata into `atlasParam` first (see [`stamp_run_metadata!`](@ref)). The header
+    # is written exactly once, at the top of the run — before any map — with any manual
+    # write and `close_writer` guarding it as a safety net.
     io = smartOpen(output_file_path, io_mode)
-    newAtlas(io, atlasHeader, atlasParam)
 
-    atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam)
+    atlas = Atlas{AtlasParam}(io, description, time_stamp, atlasParam, MapParam,
+                              weight_type)
     map_output_data = Dict{String, Function}()
 
     node_map = get_node_map(partition.node_col, partition)
 
-    return Writer(atlas, MapParam(), map_output_data, output_districting, 
-                  node_map, partition.node_col)#, proposal_diagnostics)
+    # `header_written=true` up front (write_header=false) marks the header as already
+    # present in the file, which is what suppresses it for an append.
+    writer = Writer(atlas, MapParam(), map_output_data, output_districting,
+                    node_map, partition.node_col,
+                    PathRecorder[], path_target_points, !write_header,
+                    nothing, nothing, nothing)#, proposal_diagnostics)
+    stamp_execution_metadata!(writer; include_script=include_script,
+                              max_include_bytes=max_include_bytes)
+    if config_file !== nothing && isfile(config_file)
+        try
+            writer.config_text = read(config_file, String)
+        catch
+            writer.config_text = nothing
+        end
+    end
+    return writer
+end
+
+"""
+    write_header!(writer)
+
+Write the Atlas header (the file's first three lines: format banner, header record,
+and the `atlasParam` dictionary) to disk, exactly once. Deferred from the `Writer`
+constructor so a `run_*!` sampler can merge its run metadata into `atlasParam` first
+(see [`stamp_run_metadata!`](@ref)). Idempotent: no-op once the header is written, so it
+is safe to call from every map-writing entry point.
+"""
+function write_header!(writer::Writer)
+    writer.header_written && return
+    # Append the captured script source as the header's final key, right before
+    # serialization, so it lands last on the third line regardless of any run
+    # metadata stamped in between (AtlasParam is an OrderedDict). A user-supplied
+    # `additional_parameters["script"]` keeps its own position and wins.
+    if writer.script_text !== nothing && !haskey(writer.atlas.atlasParam, "script")
+        writer.atlas.atlasParam["script"] = writer.script_text
+    end
+    # The script's own `include`s go right after it: a runner script's behaviour is
+    # usually spread across the files it pulls in, so embedding one without the other
+    # records only part of what produced the atlas.
+    if writer.include_data !== nothing
+        for (key, val) in writer.include_data
+            haskey(writer.atlas.atlasParam, key) ||
+                (writer.atlas.atlasParam[key] = val)
+        end
+    end
+    # Append the TOML config's raw contents last of all — after "script" — so it can
+    # never be overwritten by (and never overwrites) any other header data. Skipped
+    # entirely when no config file was given or read (see the `config_file` argument
+    # of `Writer`).
+    if writer.config_text !== nothing && !haskey(writer.atlas.atlasParam, "toml_config")
+        writer.atlas.atlasParam["toml_config"] = writer.config_text
+    end
+    atlasHeader = AtlasHeader(writer.atlas.description, writer.atlas.date,
+                              AtlasParam, MapParam;
+                              weightType=writer.atlas.weightType)
+    newAtlas(writer.atlas.io, atlasHeader, writer.atlas.atlasParam)
+    writer.header_written = true
+    return
+end
+
+"""
+    real_name() -> String
+
+Best-effort lookup of the full ("real") name of the OS user running this process,
+from the OS user database rather than the environment. Returns an empty string when
+no full name is available (a common case on servers, containers, and CI, where the
+field is unset). Platform sources:
+
+- macOS: `id -F` (the Directory Services full name).
+- Linux: the first comma-separated component of the GECOS field of the `getent passwd`
+  entry (extra office/phone components are dropped).
+- Windows: the account's `FullName` via WMI.
+
+The name is free-form, user/admin-set text — fine for provenance labeling, but not an
+authenticated identity. Any failure (missing tool, empty database entry) is swallowed
+and yields `""`.
+"""
+function real_name()
+    try
+        if Sys.isapple()
+            return strip(read(`id -F`, String))
+        elseif Sys.islinux()
+            user = get(ENV, "USER", "")
+            isempty(user) && return ""
+            line = strip(read(`getent passwd $user`, String))
+            fields = split(line, ':')
+            length(fields) < 5 && return ""
+            return strip(split(fields[5], ',')[1])
+        elseif Sys.iswindows()
+            name = get(ENV, "USERNAME", "")
+            isempty(name) && return ""
+            cmd = "(Get-CimInstance Win32_UserAccount -Filter \"Name='$name'\").FullName"
+            return strip(read(`powershell -NoProfile -Command $cmd`, String))
+        end
+    catch
+    end
+    return ""
+end
+
+"""
+    collect_included_sources(script_path; max_bytes=MAX_INCLUDE_BYTES,
+                             max_depth=MAX_INCLUDE_DEPTH)
+        -> (sources, unresolved, skipped)
+
+Read the sources of every file `script_path` pulls in with `include`, following
+`include`s of `include`s. Returns
+
+- `sources`: an `OrderedDict` from each file's path — relative to `script_path`'s
+  directory, so nothing leaks the absolute layout of the machine that ran it — to its
+  full text, in the order the files were discovered;
+- `unresolved`: the text of any `include(…)` call whose argument is not a literal
+  string (a computed path cannot be followed by reading the source), and of any
+  literal include whose file does not exist;
+- `skipped`: files not embedded because `max_bytes` of source had already been
+  collected.
+
+A runner script's behaviour usually lives mostly in the files it includes, so an Atlas
+that embeds the script alone records only part of what produced it (see
+[`stamp_execution_metadata!`](@ref), which stores this under `"script_includes"`).
+
+Each file's `include`s are resolved relative to that file's own directory, matching
+Julia. Cycles are impossible (each absolute path is visited once) and recursion stops
+at `max_depth`. Nothing here throws: an unreadable file is reported in `unresolved`
+rather than raised, since provenance must never take a run down.
+"""
+function collect_included_sources(
+    script_path::AbstractString;
+    max_bytes::Int=MAX_INCLUDE_BYTES,
+    max_depth::Int=MAX_INCLUDE_DEPTH
+)
+    sources = OrderedDict{String, String}()
+    unresolved = String[]
+    skipped = String[]
+    root = dirname(abspath(script_path))
+    visited = Set{String}([abspath(script_path)])
+    total = 0
+
+    # `include("literal")`, ignoring commented-out lines. Anything else that calls
+    # include (a computed path, a variable) is reported rather than followed.
+    literal_re = r"\binclude\(\s*\"([^\"]*)\"\s*\)"
+    any_re = r"\binclude\("
+
+    function scan(path::AbstractString, text::AbstractString, depth::Int)
+        depth > max_depth && return
+        here = dirname(abspath(path))
+        for line in eachline(IOBuffer(text))
+            stripped = lstrip(line)
+            startswith(stripped, "#") && continue
+            occursin(any_re, line) || continue
+            m = match(literal_re, line)
+            if m === nothing
+                push!(unresolved, strip(line))
+                continue
+            end
+            inc_abs = abspath(joinpath(here, m.captures[1]))
+            inc_abs in visited && continue
+            push!(visited, inc_abs)
+            if !isfile(inc_abs)
+                push!(unresolved, strip(line))
+                continue
+            end
+            inc_text = try
+                read(inc_abs, String)
+            catch
+                push!(unresolved, strip(line))
+                continue
+            end
+            rel = relpath(inc_abs, root)
+            if total + sizeof(inc_text) > max_bytes
+                push!(skipped, rel)
+                continue
+            end
+            total += sizeof(inc_text)
+            sources[rel] = inc_text
+            scan(inc_abs, inc_text, depth+1)
+        end
+    end
+
+    try
+        scan(script_path, read(script_path, String), 1)
+    catch
+        # an unreadable top-level script is already handled by the caller
+    end
+    return sources, unresolved, skipped
+end
+
+"""
+    stamp_execution_metadata!(writer; include_script=true,
+                              max_include_bytes=MAX_INCLUDE_BYTES)
+
+Stamp who and what is producing this Atlas into the header's `atlasParam`: the running
+`"user"` (from `ENV["USER"]`/`ENV["USERNAME"]`), the `"user_full_name"` (from
+[`real_name`](@ref), omitted when unavailable), the `"julia_version"`, and, when a
+script is being run (`PROGRAM_FILE` is non-empty), its `"script_name"`.
+
+When `include_script=true` (the default) the executing script's full source is captured
+and, by [`write_header!`](@ref), appended near the end of the header under `"script"`,
+followed by the sources of every file the script `include`s under `"script_includes"`
+(see [`collect_included_sources`](@ref)) — a runner script's behaviour usually lives
+mostly in those files. `"script_includes_unresolved"` and `"script_includes_skipped"`
+record what could not be followed and what `max_include_bytes` cut off, and are omitted
+when empty. Pass `include_script=false` to embed no source at all.
+
+Called automatically by the [`Writer`](@ref) constructor, but also safe to call by hand
+on an existing writer before its header is written. Each field is set only if absent, so
+a user's `additional_parameters` win; a no-op in the REPL for the script fields (no
+`PROGRAM_FILE`), and an unreadable script is skipped rather than raised.
+"""
+function stamp_execution_metadata!(
+    writer::Writer;
+    include_script::Bool=true,
+    max_include_bytes::Int=MAX_INCLUDE_BYTES
+)
+    ap = writer.atlas.atlasParam
+    haskey(ap, "user") ||
+        (ap["user"] = get(ENV, "USER", get(ENV, "USERNAME", "unknown")))
+    if !haskey(ap, "user_full_name")
+        name = real_name()
+        isempty(name) || (ap["user_full_name"] = name)
+    end
+    haskey(ap, "julia_version") || (ap["julia_version"] = string(VERSION))
+    if !isempty(PROGRAM_FILE)
+        haskey(ap, "script_name") || (ap["script_name"] = basename(PROGRAM_FILE))
+        if include_script && !haskey(ap, "script") && isfile(PROGRAM_FILE)
+            try
+                writer.script_text = read(PROGRAM_FILE, String)
+                sources, unresolved, skipped =
+                    collect_included_sources(PROGRAM_FILE;
+                                             max_bytes=max_include_bytes)
+                include_data = OrderedDict{String, Any}()
+                isempty(sources) ||
+                    (include_data["script_includes"] = sources)
+                isempty(unresolved) ||
+                    (include_data["script_includes_unresolved"] = unresolved)
+                isempty(skipped) ||
+                    (include_data["script_includes_skipped"] = skipped)
+                writer.include_data = isempty(include_data) ? nothing : include_data
+            catch
+                writer.script_text = nothing
+                writer.include_data = nothing
+            end
+        end
+    end
+    return writer
+end
+
+"""
+    stamp_run_metadata!(writer, metadata)
+
+Merge a sampler's run-metadata dict (see the `*_run_metadata` builders) into the
+writer's `atlasParam` and then write the header. Existing keys are preserved — any
+`additional_parameters` the caller passed to [`Writer`](@ref) win over the auto-stamped
+fields — so a user's own entries are never clobbered. No-op if `writer === nothing` or
+the header is already written (metadata must be stamped before the first map). Called at
+the top of each `run_*!` sampler.
+"""
+function stamp_run_metadata!(writer::Union{Writer, Nothing}, metadata::AbstractDict)
+    writer === nothing && return
+    if !writer.header_written
+        for (k, v) in metadata
+            haskey(writer.atlas.atlasParam, k) || (writer.atlas.atlasParam[k] = v)
+        end
+    end
+    write_header!(writer)
+    return
 end
 
 """
@@ -111,11 +468,50 @@ function push_writer!(
 end
 
 """
+    push_path_writer!(writer, spec; desc=nothing)
+
+Register an annealing-path recorder on `writer`, the path-time analogue of
+[`push_writer!`](@ref). During [`run_annealed_importance_sampling!`](@ref) each
+registered recorder's value is sampled every `path_stride` steps (chosen so each
+annealed sample yields about `writer.path_target_points` points) and written to that
+sample's output map under `desc`, as a vector alongside the ordinary observables.
+
+`spec` is either a built-in symbol — `:log_weight` (running cumulative log importance
+weight), `:delta_log_weight` (that step's increment), or `:schedule_frac`
+(`cur_step/total_steps`) — or a partition observable `f(partition)` (e.g.
+`get_isoperimetric_score`, `get_log_spanning_forests`) evaluated on the intermediate
+annealing partition. `desc` defaults to `"path/"*string(spec)`. Recording is fully
+opt-in: with no recorders registered, annealing runs the original hook with no added
+cost; a partition-observable recorder costs one evaluation per stride only when set.
+"""
+function push_path_writer!(
+    writer::Writer,
+    spec::Symbol;
+    desc::Union{String, Nothing}=nothing
+)
+    spec in (:log_weight, :delta_log_weight, :schedule_frac) ||
+        throw(ArgumentError("unknown path recorder symbol :$spec (expected " *
+              ":log_weight, :delta_log_weight, or :schedule_frac)"))
+    d = desc === nothing ? "path/"*string(spec) : desc
+    push!(writer.path_recorders, PathRecorder(d, spec, nothing))
+end
+
+function push_path_writer!(
+    writer::Writer,
+    get_data::Function;
+    desc::Union{String, Nothing}=nothing
+)
+    d = desc === nothing ? "path/"*string(get_data) : desc
+    push!(writer.path_recorders, PathRecorder(d, :observable, get_data))
+end
+
+"""
     close_writer(writer)
 
 Flush and close the underlying Atlas file. Call once after the run finishes.
 """
 function close_writer(writer::Writer)
+    write_header!(writer)   # ensure a valid file even if no map was ever written
     close(writer.atlas.io)
 end
 
@@ -157,12 +553,68 @@ function get_node_map!(
 end
 
 """
-    output(partition, measure, step, count, writer, run_diagnostics=RunDiagnostics())
+    fill_map_param!(map_param, writer, partition, run_diagnostics)
+
+Evaluate every observable registered on `writer` and every recorded diagnostic into
+`map_param` (a `Dict{String, Any}`) for the current `partition`, and return it.
+"""
+function fill_map_param!(
+    map_param::MapParam,
+    writer::Writer,
+    partition::LinkCutPartition,
+    run_diagnostics::RunDiagnostics
+)
+    for (desc, f) in writer.map_output_data
+        map_param[desc] = f(partition)
+    end
+    for (rd_desc, proposal_diagnostics) in values(run_diagnostics)
+        for (pd_desc, proposal_diagnostic) in proposal_diagnostics
+            desc = "("*join([rd_desc, pd_desc], ",")*")"
+            map_param[desc] = proposal_diagnostic.data_vec
+        end
+    end
+    return map_param
+end
+
+"""
+    build_output_map(writer, partition, name, weight=1,
+                     run_diagnostics=RunDiagnostics())
+
+Build and return the Atlas `Map` that [`output`](@ref) would write for the current
+`partition`, named `name` and carrying the sampling weight `weight`, without
+touching the writer's file or its reusable buffers. Every container in the returned
+map is freshly allocated, so this is safe to call concurrently from several tasks
+sharing one `Writer` (each with its own `partition` and `run_diagnostics`); only
+the eventual `addMap` call must be serialized.
+"""
+function build_output_map(
+    writer::Writer,
+    partition::LinkCutPartition,
+    name::String,
+    weight::Real=1,
+    run_diagnostics::RunDiagnostics=RunDiagnostics();
+    extra_data::Union{Nothing, AbstractDict}=nothing
+)
+    map_param = fill_map_param!(MapParam(), writer, partition, run_diagnostics)
+    extra_data !== nothing && merge!(map_param, extra_data)
+    if !writer.output_districting
+        districting = Dict{Tuple{Vararg{String}}, Int}()
+    else
+        districting = get_node_map(writer.node_field, partition)
+    end
+    return Map{MapParam}(name, districting, weight, map_param)
+end
+
+"""
+    output(partition, measure, step, count, writer, run_diagnostics=RunDiagnostics();
+           weight=1)
 
 Write one Atlas map for the current `partition`: evaluate every registered observable
 and diagnostic into the map's parameters, attach the node→district assignment (unless
 `output_districting` is false), append the map to the Atlas, and reset the
-diagnostics. No-op if `writer === nothing`.
+diagnostics. No-op if `writer === nothing`. `weight` is recorded as the map's
+sampling weight (a [`MutableFloat`](@ref) is unboxed); its type should match the
+writer's `weight_type`.
 """
 function output(
     partition::LinkCutPartition,
@@ -170,31 +622,29 @@ function output(
     step::Integer,
     count::Int,
     writer::Union{Writer, Nothing},
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics();
+    weight::Union{Real, MutableFloat}=1
 )
     if writer == nothing
         return
     end
+    write_header!(writer)   # safety net for direct map writes (no-op after the first)
+    if weight isa MutableFloat
+        weight = weight.value
+    end
 
-    for (desc, f) in writer.map_output_data
-        writer.map_param[desc] = f(partition)
-    end
-    for (rd_desc, proposal_diagnostics) in values(run_diagnostics)
-        for (pd_desc, proposal_diagnostic) in proposal_diagnostics
-            desc = "("*join([rd_desc, pd_desc], ",")*")"
-            writer.map_param[desc] = proposal_diagnostic.data_vec
-        end
-    end
+    fill_map_param!(writer.map_param, writer, partition, run_diagnostics)
 
     # @show writer.map_param
 ########## get_map() or something
     if !writer.output_districting
         d = Dict{Tuple{Vararg{String}}, Int}()
-        map = Map{MapParam}("step"*string(step-count), d, 1, writer.map_param)
+        map = Map{MapParam}("step"*string(step-count), d, weight,
+                            writer.map_param)
     else
-        map = Map{MapParam}("step"*string(step-count), 
-                            get_node_map!(writer, partition), 
-                            1, writer.map_param)
+        map = Map{MapParam}("step"*string(step-count),
+                            get_node_map!(writer, partition),
+                            weight, writer.map_param)
     end
 ##########
 
@@ -208,4 +658,5 @@ function output(
         @assert false
     end
     reset_diagnostics!(run_diagnostics)
+    return map
 end

@@ -4,14 +4,17 @@ using SimpleWeightedGraphs
 using DataStructures:
     IntDisjointSet,
     in_same_set,
-    SortedDict
+    SortedDict,
+    OrderedDict
 using Graphs
 using RandomNumbers
 using LinearAlgebra
+using SparseArrays: rowvals, nonzeros, nzrange, sparse
 using Hungarian
 import Combinatorics
 using Dates
 using AtlasIO
+using TOML
 using LinkCutTreesAugmented:
     Node,
     LinkCutTree,
@@ -102,6 +105,7 @@ export AbstractGraph,
     # MaxHammingDistance,
     
     LinkCutPartition,
+    relabel_districts!,
 
     # Diagnostics
     RunDiagnostics,
@@ -119,13 +123,47 @@ export AbstractGraph,
     Writer,
     close_writer,
     push_writer!,
+    push_path_writer!,
+    stamp_execution_metadata!,
+    collect_included_sources,
+    write_header!,
 
     # mcmc
     run_metropolis_hastings!,
-    
+    run_annealed_importance_sampling!,
+    run_annealed_smc!,
+    FixedSchedule,
+    AdaptiveTempering,
+    reset_schedule!,
+    LinearPath,
+    linear_path,
+    annealed_smc_scores_and_targets,
+    describe_proposal,
+    name_proposal!,
+    proposal_name,
+    metropolis_hastings_run_metadata,
+    annealed_importance_sampling_run_metadata,
+    annealed_smc_run_metadata,
+    parallel_tempering_run_metadata,
+
     # energies/observables
     Measure,
     push_energy!,
+    evaluate_weight_expression,
+    weight_expression_parameters,
+    weight_path_closure,
+    evaluate_column_expression,
+    derive_node_columns!,
+    EnergySpec,
+    energy_specs,
+    measure_parameters,
+    annealing_weights,
+    referenced_parameters,
+    energy_weight,
+    energy_weight_start,
+    build_annealed_measure,
+    build_measure,
+    build_path_measure,
     get_log_energy,
     get_log_spanning_trees,
     get_log_spanning_forests,
@@ -161,9 +199,20 @@ export AbstractGraph,
     run_chain!,
 
     # parallel tempering
-    # parallel_tempering!,
-    # parse_base_samples,
-    # parse_base_measure,
+    BetaLattice,
+    linear_betas,
+    geometric_betas,
+    HeatBath,
+    PTDiagnostics,
+    reset_pt_diagnostics!,
+    swap_rate,
+    run_parallel_tempering!,
+    SerialBackend,
+    ThreadedBackend,
+    # DistributedBackend,
+    parse_bath_measure,
+    parse_bath_samples,
+    try_heat_bath!,
 
     # cluster graph
     cluster_base_graph
@@ -173,6 +222,7 @@ include("./auxilary/SimpleWeightedGraphs_BugFixes.jl")
 include("./utilities/array_utils.jl")
 
 include("./graph/graph.jl")
+include("./graph/derived_columns.jl")
 include("./trees/neighbor_list_tree.jl")
 include("./trees/tree.jl")
 include("./trees/tree_metrics.jl")
@@ -181,6 +231,7 @@ include("./trees/russo_ust.jl")
 # type defs
 include("./measure/energy/energy_types.jl")
 include("./proposals/update.jl")
+include("./proposals/named_proposal.jl")
 include("./diagnostics/proposal_diagnostics_types.jl")
 
 include("./measure/constraints/constraints.jl")
@@ -201,6 +252,8 @@ include("./measure/constraints/budgeted_region_constraint/budgeted_region_constr
 include("./measure/constraints/balance.jl")
 
 include("./measure/measure.jl")
+include("./measure/weight_expressions.jl")
+include("./measure/measure_spec.jl")
 include("./measure/energy/defaults.jl")
 include("./measure/energy/log_forest_count.jl")
 include("./measure/energy/polsby_popper.jl")
@@ -230,6 +283,14 @@ include("./proposals/internal_forest_walk.jl")
 include("./proposals/bud_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
+include("./chains/anneal_path.jl")
+include("./chains/annealed_importance_sampling.jl")
+include("./chains/annealed_smc.jl")
+include("./chains/parallel_tempering_types.jl")
+include("./chains/pt_backends.jl")
+include("./chains/parallel_tempering.jl")
+include("./chains/pt_heat_bath.jl")
+include("./io/run_metadata.jl")
 
 # include("./parallel_tempering_multiprocessing.jl")
 end # module

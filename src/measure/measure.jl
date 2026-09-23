@@ -27,19 +27,29 @@ function Measure()
 end
 
 """
-    push_energy!(measure, score, weight; desc="")
+    push_energy!(measure, score, weight; desc="", allow_zero=false)
 
 Add the energy `score` to `measure` with the given `weight`; `desc` is an optional
 label for output metadata (defaults to the function's name). `score` must have the
 signature `score(partition, districts; update)`. A zero `weight` is ignored.
+
+Pass `allow_zero=true` to keep a zero-weight score in the measure anyway. This is what
+an annealing schedule needs: a run that ramps an energy's weight *down to* zero has a
+zero target weight, and a score that never entered `measure.scores` can never be
+annealed, since [`get_log_energy`](@ref) sums over `scores` (a weight written straight
+into `measure.weights` for a score outside that set is silently ignored, and leaves
+`weights` and `scores` out of sync). Keeping the score costs nothing per step —
+`get_log_energy` skips zero weights when it evaluates — but it does mean the score
+appears in the Atlas header's energy list with weight `0`.
 """
 function push_energy!(
     measure::Measure,
     score::Function,
     weight::Real;
-    desc::String=""
+    desc::String="",
+    allow_zero::Bool=false
 )
-    weight == 0 && return 
+    weight == 0 && !allow_zero && return
     @assert keys(measure.weights) == measure.scores
     @assert keys(measure.descriptions) == measure.scores
     push!(measure.scores, score)

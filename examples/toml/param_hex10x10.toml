@@ -1,24 +1,38 @@
+# 10x10 hexagonal lattice, 5 districts.
+#   julia --project=. run_cyclewalk_toml.jl toml/param_hex10x10.toml
+# Every key is documented in ../../docs/run_cyclewalk_toml.md
+
 [plans]
 pop_dev = 0.0001
 num_dists = 5
 node_data=["county", "node_name", "population","area","border_length"]
 geo_units=["node_name"]
 pop_col="population"
-area_col="area" 
+area_col="area"
 node_border_col="border_length"
 edge_perimeter_col="length"
 map_directory=["data","hex"]
 map_file="hex_graph_10_by_10.json"
 
-[measure]
-gamma=0.0
-iso_weight=0.0
-measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
-
-
 [mcmc]
 cycle_walk_steps = 1e5
 two_cycle_walk_frac = 0.1
+
+# The target measure: one [[measure.energy]] block per energy, each weighted by a
+# number or by arithmetic over the parameters named in [measure]. A weight of zero
+# drops its energy, so gamma=0/iso_weight=0 below samples the plain spanning-forest
+# measure; raise either (here, or with --gamma / --iso_weight) to weight the target.
+[measure]
+gamma=0.0
+iso_weight=0.0
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
 
 [run]
 thread_id = 1
@@ -26,5 +40,5 @@ atlasNameBase="hex_10x10_cycleWalk"
 outputDirectory=["output","hex","Hex_10x10"]
 cycle_walk_out_freq=100
 writer_stats=["get_log_spanning_trees"]
-compress="gz" 
+compress="gz"
 run_diagnostics=false

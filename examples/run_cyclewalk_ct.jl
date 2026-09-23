@@ -1,5 +1,5 @@
 ## Run:
-# julia runCycleWalk_ct.jl
+# julia run_cyclewalk_ct.jl
 
 ## Activate the CycleWalk environment  and load necessary packages
 import Pkg
@@ -25,6 +25,7 @@ outfreq = Int(1000/twocycle_frac)
 
 ## build graph
 pctGraphPath = joinpath("data","ct","CT_pct20.json")
+isfile(pctGraphPath) || error("map file not found: $pctGraphPath")
 nodeData = Set(["COUNTY", "NAME", "POP20", "area", "border_length"]);
 graph = Graph(pctGraphPath, "POP20", "NAME"; inc_node_data=nodeData,
               area_col="area", node_border_col="border_length", 
@@ -53,6 +54,7 @@ atlasName *= "_gamma"*string(gamma)
 atlasName *= "_iso"*string(iso_weight)
 atlasName *= ".jsonl.gz" # or just ".jsonl" for an uncompressed output
 output_file_path = joinpath("output","ct", atlasName) # add output directory to path
+mkpath(dirname(output_file_path))
 
 ## establish writer to which the output will be written
 ad_param = Dict{String, Any}("popdev" => pop_dev) # specific info to write
@@ -72,7 +74,7 @@ push_writer!(writer, get_isoperimetric_scores) # add isoperimetric scores to wri
 ## run MCMC sampler
 println("running mcmc; outputting here: "* output_file_path)
 run_metropolis_hastings!(partition, proposal, measure, steps, rng,
-                         writer=writer, output_freq=outfreq
+                         writer=writer, output_freq=outfreq, seed=4541901234
                         #, run_diagnostics = run_diagnostics  ## Uncoment this line to run diagnostics
 )
 close_writer(writer) # close atlas

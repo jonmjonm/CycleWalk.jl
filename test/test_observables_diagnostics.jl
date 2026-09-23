@@ -102,6 +102,21 @@ end
     @test 0.0 <= seats <= partition.num_dists
     # Seats = number of districts where dem share strictly exceeds 50%.
     @test seats == count(>(50.0), margins)
+
+    # --- partition-free path -------------------------------------------------
+    # The builders return callables that subtype Function (so push_writer!/Writer
+    # still accept them) and also expose f(node_to_dist, ::BaseGraph, num_dists).
+    @test get_margins isa Function
+    @test get_seats isa Function
+    n2d, base, nd = partition.node_to_dist, partition.graph, partition.num_dists
+    @test hasmethod(get_margins, Tuple{Vector{Int}, typeof(base), Int})
+    @test hasmethod(get_seats, Tuple{Vector{Int}, typeof(base), Int})
+
+    # Same tally as the LinkCutPartition path (same node numbering, no spanning tree).
+    @test CycleWalk.get_partisan_margins(n2d, base, nd, "dem", "rep") == margins
+    @test CycleWalk.get_partisan_seats(n2d, base, nd, "dem", "rep") == seats
+    @test get_margins(n2d, base, nd) == margins       # via the functor
+    @test get_seats(n2d, base, nd) == seats
 end
 
 @testset "performant VRA score and report" begin

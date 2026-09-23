@@ -1,0 +1,50 @@
+# Small grid SMC config for smoke-testing run_asmc_toml.jl (10x10 grid, 3 districts).
+#   julia -t 2 run_asmc_toml.jl toml/param_annealed_smc_grid.toml
+[plans]
+pop_dev = 0.02
+num_dists = 3
+node_data = ["node_name", "population", "area", "border_length", "county"]
+geo_units = ["node_name"]
+pop_col = "population"
+area_col = "area"
+node_border_col = "border_length"
+edge_perimeter_col = "length"
+map_directory = ["data", "grid"]
+map_file = "grid_graph_10_by_10.json"
+
+[measure]
+# Annealing endpoints: each energy's `weight` is its TARGET (t=1) and its
+# `weight_start` the BASE the base chain samples at t=0 (default 0, which recovers the
+# spanning-forest base). A weight may also be arithmetic over the parameters above.
+gamma = 0.25
+iso_weight = 0.3
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+# weight_start = 0.0
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+# weight_start = 0.0
+
+[smc]
+schedule = "fixed"
+particles = 16
+blocks = 10
+rejuv = 20
+init_steps = 50           # base-measure burn-in; must be > 0 when schedule = "adaptive"
+ess_frac = 0.5
+collect_steps = 100
+collect_every = 50
+resample_before_collect = true
+
+[run]
+atlasNameBase = "gridtest"
+outputDirectory = ["output", "validation"]
+two_cycle_walk_frac = 0.1
+writer_stats = ["get_isoperimetric_scores", "get_log_spanning_trees"]
+compress = "gz"
+seed = 87654321
+description = "grid SMC smoke"

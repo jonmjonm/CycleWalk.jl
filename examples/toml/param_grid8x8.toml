@@ -1,25 +1,38 @@
+# 8x8 grid, 4 districts.
+#   julia --project=. run_cyclewalk_toml.jl toml/param_grid8x8.toml
+# Every key is documented in ../../docs/run_cyclewalk_toml.md
+
 [plans]
 pop_dev = 0.0001
 num_dists = 4
 node_data=["county", "node_name", "population","area","border_length"]
 geo_units=["node_name"]
 pop_col="population"
-area_col="area" 
+area_col="area"
 node_border_col="border_length"
 edge_perimeter_col="length"
-
 map_directory=["data","grid"]
 map_file="grid_graph_8_by_8.json"
-
-[measure]
-gamma=0.0
-iso_weight=0.0
-measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
-
 
 [mcmc]
 cycle_walk_steps = 1e4
 two_cycle_walk_frac = 0.1
+
+# The target measure: one [[measure.energy]] block per energy, each weighted by a
+# number or by arithmetic over the parameters named in [measure]. A weight of zero
+# drops its energy, so gamma=0/iso_weight=0 below samples the plain spanning-forest
+# measure; raise either (here, or with --gamma / --iso_weight) to weight the target.
+[measure]
+gamma=0.0
+iso_weight=0.0
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
 
 [run]
 thread_id = 1
@@ -27,5 +40,5 @@ atlasNameBase="grid8x8_cycleWalk"
 outputDirectory=["output","grid"]
 cycle_walk_out_freq=100
 writer_stats=["get_log_spanning_trees"]
-compress="gz" 
+compress="gz"
 run_diagnostics=false

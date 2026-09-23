@@ -1,8 +1,8 @@
 # Validates the link-cut-tree refactor: the partition's tree is a PopAug tree,
-# and the maintained subtree sums (Option B) reproduce the previous on-demand
+# and the maintained subtree sums reproduce the previous on-demand
 # topological_sort exactly, including the collapsed-cycle-weight computation.
 
-@testset "Option B / PopAug partition" begin
+@testset "PopAug partition" begin
     json = joinpath(testdir, "test_graphs", "4x4pct_2x2cnty.json")
     nd = Set(["county", "pct", "pop", "area", "border_length"])
     bg = BaseGraph(json, "pop"; inc_node_data=nd, area_col="area",

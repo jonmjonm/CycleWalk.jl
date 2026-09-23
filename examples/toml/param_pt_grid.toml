@@ -1,0 +1,49 @@
+# Small grid PT config for smoke-testing run_pt_toml.jl (10x10 grid, 3 districts).
+#   julia -t 8 run_pt_toml.jl toml/param_pt_grid.toml
+[plans]
+pop_dev = 0.02
+num_dists = 3
+node_data = ["node_name", "population", "area", "border_length", "county"]
+geo_units = ["node_name"]
+pop_col = "population"
+area_col = "area"
+node_border_col = "border_length"
+edge_perimeter_col = "length"
+map_directory = ["data", "grid"]
+map_file = "grid_graph_10_by_10.json"
+
+[measure]
+# temper = "linear" (below) ramps every energy from 0 to its target together, so
+# no weight_start/weight_path is needed here — see docs/run_pt_toml.md for the
+# "path" mode, which lets each energy follow its own schedule.
+gamma = 0.25
+iso_weight = 0.3
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
+
+[pt]
+n_rungs       = 8            # size to your thread count: ThreadedBackend spawns
+                              # exactly n_rungs tasks/round (see pt_profiling_notes.md)
+lattice       = "linear"     # "linear" | "geometric" (or set betas = [...] explicitly)
+swap_interval = 100          # MH steps between swap rounds, per rung
+n_rounds      = 200
+init_steps    = 200          # decorrelate each rung's replica before swapping starts
+backend       = "threaded"   # "serial" | "threaded"
+temper        = "linear"     # "linear" | "path"
+write_rungs   = "target"     # "target" | "all" | "none"
+output_every  = 1
+
+[run]
+atlasNameBase = "gridtest"
+outputDirectory = ["output", "validation"]
+two_cycle_walk_frac = 0.1
+writer_stats = ["get_isoperimetric_scores", "get_log_spanning_trees"]
+compress = "gz"
+seed = 87654321
+description = "grid PT smoke"

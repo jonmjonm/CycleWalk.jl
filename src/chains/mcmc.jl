@@ -1,7 +1,9 @@
 """
     run_metropolis_hastings!(partition, proposal, measure, steps, rng;
                              writer=nothing, output_freq=250,
-                             run_diagnostics=RunDiagnostics())
+                             run_diagnostics=RunDiagnostics(),
+                             prestepf=(x...)->nothing, prestepargs=(),
+                             output_initial=true, sample_data_hook=nothing, weight=1)
 
 Run the Metropolis–Hastings sampler in place on `partition`. Each step draws a
 proposal (a single closure, or one sampled from a weighted mixture whose weights must
@@ -9,7 +11,19 @@ sum to 1), multiplies its proposal probability ratio by the energy ratio from
 `measure`, and accepts with that probability — applying accepted moves with
 [`update_partition!`](@ref). `steps` is a step count or an `(initial, final)` range.
 Every `output_freq` steps the current plan and any registered observables/diagnostics
-are written to `writer`.
+are written to `writer`; set `output_initial=false` to suppress the map otherwise
+written before the first step. `prestepf(step, prestepargs...)` is called before
+each proposal — annealed importance sampling uses it to anneal `measure` and
+accumulate the log importance weight. `weight` is recorded as each output map's
+sampling weight; passing a [`MutableFloat`](@ref) lets `prestepf` update it as the
+run progresses.
+
+When supplied, `sample_data_hook(data, step)` is called immediately after every
+regular `output_freq` sample is written. `data` is the Atlas map's already-computed
+observable dictionary, keyed by the descriptions given to `push_writer!`; it excludes
+the map name, weight, and district assignment. The dictionary is a reusable Writer
+buffer and must not be mutated or retained. The hook is not called for the optional
+initial output, nor when `writer=nothing`.
 """
 function run_metropolis_hastings!(
     partition::LinkCutPartition,
@@ -19,24 +33,43 @@ function run_metropolis_hastings!(
     rng::AbstractRNG;
     writer::Union{Writer, Nothing}=nothing,
     output_freq::Int=250,
-    run_diagnostics::RunDiagnostics=RunDiagnostics()
+    run_diagnostics::RunDiagnostics=RunDiagnostics(),
+    prestepf::Function=(x...)->nothing,
+    prestepargs::Tuple=(),
+    output_initial::Bool=true,
+    sample_data_hook::Union{Nothing, Function}=nothing,
+    weight::Union{Real, MutableFloat}=1,
+    seed=nothing
 ) where T <: Real
     # Want this, but need to redefine it: precompute_node_tree_counts!(partition)
     check_proposals_weights(proposal)
-    
+
+    # Stamp this run's metadata onto the atlas header before any map is written. Inner
+    # annealing chains (AIS/ASMC rejuvenation) pass writer=nothing, so only a genuine
+    # standalone MH run records the "standard metropolized CycleWalk" tag.
+    if writer !== nothing
+        stamp_run_metadata!(writer,
+            metropolis_hastings_run_metadata(proposal, steps;
+                                             seed=seed, output_freq=output_freq))
+    end
+
     initial_step, final_step = set_step_bounds(steps)
-    if initial_step == 0 || initial_step == 1
-        output(partition, measure, initial_step, 0, writer)
+    if (initial_step == 0 || initial_step == 1) && output_initial
+        output(partition, measure, initial_step, 0, writer; weight=weight)
     end
 
     for step = initial_step:final_step
+        prestepf(step, prestepargs...)
         proposal!, proposal_index = get_random_proposal(proposal, rng)
         proposal_diagnostics = get_proposal_diagnostics(run_diagnostics, 
                                                         proposal!)
         p, update = proposal!(partition, rng, diagnostics=proposal_diagnostics)
         if p == 0
             if mod(step, output_freq) == 0 && step != initial_step
-                output(partition, measure, step, 0, writer, run_diagnostics)
+                map = output(partition, measure, step, 0, writer, run_diagnostics;
+                             weight=weight)
+                sample_data_hook !== nothing && map !== nothing &&
+                    sample_data_hook(map.data, step)
             end
             continue
         end
@@ -48,7 +81,10 @@ function run_metropolis_hastings!(
             update_partition!(partition, update)
         end
         if mod(step, output_freq) == 0
-            output(partition, measure, step, 0, writer, run_diagnostics)
+            map = output(partition, measure, step, 0, writer, run_diagnostics;
+                         weight=weight)
+            sample_data_hook !== nothing && map !== nothing &&
+                sample_data_hook(map.data, step)
         end
     end
 end
@@ -207,4 +243,3 @@ function post_step!(
     #     @show desc, report_func∈measure.scores, report_func
     # end
 end
-

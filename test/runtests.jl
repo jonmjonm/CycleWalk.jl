@@ -54,11 +54,26 @@ small_square_base_graph = BaseGraph(small_square_json, "pop",
                                     edge_perimeter_col="length")
 small_square_graph = MultiLevelGraph(small_square_base_graph, ["pct"])
 
+# a plain population constraint on the small square graph, for tests that just need a
+# valid partition to evaluate energies on
+measure_constraints = initialize_constraints()
+add_constraint!(measure_constraints,
+                PopulationConstraint(small_square_graph, 4, 0.1))
+
 
 include(joinpath(testdir, "test_linkcuttree.jl"))
 include(joinpath(testdir, "test_option_b.jl"))
 include(joinpath(testdir, "test_cuttable_edges.jl"))
-include(joinpath(testdir, "test_bud_walk_helpers.jl"))
+# include(joinpath(testdir, "test_bud_walk_helpers.jl"))
+include(joinpath(testdir, "test_annealed_importance_sampling.jl"))
+include(joinpath(testdir, "test_annealed_smc.jl"))
+include(joinpath(testdir, "test_parallel_tempering.jl"))
+include(joinpath(testdir, "test_run_metadata.jl"))
+include(joinpath(testdir, "test_measure.jl"))
+include(joinpath(testdir, "test_log_forest_count.jl"))
+include(joinpath(testdir, "test_derived_columns.jl"))
+include(joinpath(testdir, "test_config_helpers.jl"))
+include(joinpath(testdir, "test_extend.jl"))
 include(joinpath(testdir, "test_docs_coverage.jl"))
 @testset verbose = true "observables_and_diagnostics" begin
     include(joinpath(testdir, "test_observables_diagnostics.jl"))

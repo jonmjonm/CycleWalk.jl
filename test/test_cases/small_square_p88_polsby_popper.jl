@@ -138,9 +138,73 @@ name = "small square test graph (polsby-popper), 4 districts, pop=8, gamma∈{0,
     @test length(values(observed_cuts)) == 4
 
     # test distribution (calculated explicitly)
-    ce_to_prob = get_weighted_cut_edge_dist_small_square(modified_graph, 1.0, 
+    ce_to_prob = get_weighted_cut_edge_dist_small_square(modified_graph, 1.0,
                                                          iso_weight)
     steps = sum(values(observed_cuts))
     @test all([is_close(v/steps, ce_to_prob[k]) for (k,v) in observed_cuts])
+
+    #######################################
+    # AIS sign regression with BOTH energies annealing together. The historical
+    # AIS/ASMC sign bug (commit 02c304c) was pinned in
+    # test_annealed_importance_sampling.jl, but that test only anneals gamma alone
+    # (K=1) — the multi-term dot product (K=2, both energies moving from 0 to a
+    # nonzero target on the SAME path) is untested there. This graph already has
+    # ground truth for gamma>0 AND iso_weight>0 simultaneously
+    # (get_weighted_cut_edge_dist_small_square), so reweight AIS's base-chain
+    # samples (uniform, gamma=iso=0) toward that joint target and compare the
+    # importance-weighted cut-edge histogram against the enumeration — a flipped
+    # sign would push mass toward the WRONG end of the cut-edge distribution.
+    @testset "AIS reweights correctly with gamma AND iso_weight both nonzero" begin
+        AIO = CycleWalk.AtlasIO
+        gamma_target = 0.6
+        iso_target = 0.02
+
+        ais_measure = Measure()
+        push_energy!(ais_measure, get_log_spanning_forests, gamma_target)
+        push_energy!(ais_measure, get_isoperimetric_score, iso_target)
+
+        cycle_walk    = build_lifted_tree_cycle_walk(constraints)
+        internal_walk = build_internal_forest_walk(constraints)
+        ais_proposal  = [(0.1, cycle_walk), (0.9, internal_walk)]
+
+        scores, target_w = annealed_smc_scores_and_targets(ais_measure)
+        path = linear_path(target_w)   # (0,0) -> (gamma_target, iso_target), together
+
+        rng = PCG.PCGStateOneseq(UInt64, 314159265)
+        ais_partition = LinkCutPartition(modified_graph, constraints, 4; rng=rng)
+
+        mktempdir() do tmpdir
+            output_path = joinpath(tmpdir, "ais_polsby_popper.jsonl.gz")
+            writer = Writer(ais_measure, constraints, ais_partition, output_path;
+                            weight_type=Float64)
+            push_writer!(writer, get_cut_edge_sum)
+            log_weights = run_annealed_importance_sampling!(
+                ais_partition, ais_proposal, ais_measure, 80_000, 100, 300, rng;
+                path=path, writer=writer)
+            close_writer(writer)
+
+            io = AIO.smartOpen(output_path, "r")
+            maps = AIO.nextMaps(AIO.openAtlas(io))
+            close(io)
+            @test length(maps) == length(log_weights)
+
+            mx = maximum(log_weights)
+            w = exp.(log_weights .- mx)
+            acc = Dict{Int, Float64}()
+            for (m, wi) in zip(maps, w)
+                ce = Int(m.data["get_cut_edge_sum"])
+                acc[ce] = get(acc, ce, 0.0) + wi
+            end
+            tot = sum(values(acc))
+
+            truth = get_weighted_cut_edge_dist_small_square(modified_graph,
+                                                             gamma_target, iso_target)
+            @test issubset(Set(keys(acc)), Set(keys(truth)))
+            l1 = sum(abs(get(acc, k, 0.0)/tot - v) for (k, v) in truth)
+            @test l1 < 0.15
+            # a flipped sign concentrates mass on the wrong (high-cut) end instead
+            @test l1 < 0.5   # loose bound that a flipped sign fails by a wide margin
+        end
+    end
 end
 

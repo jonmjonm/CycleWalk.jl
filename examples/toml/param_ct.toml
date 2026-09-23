@@ -1,23 +1,38 @@
+# Connecticut congressional plans (5 districts), sampled by the Metropolized Cycle Walk.
+#   julia --project=. run_cyclewalk_toml.jl toml/param_ct.toml
+# Every key is documented in ../../docs/run_cyclewalk_toml.md
+
 [plans]
 pop_dev = 0.02
 num_dists = 5
 node_data=["COUNTY", "NAME", "POP20", "area", "border_length"]
 geo_units=["NAME"]
 pop_col="POP20"
-area_col="area" 
+area_col="area"
 node_border_col="border_length"
 edge_perimeter_col="length"
 map_directory=["data","ct"]
 map_file="CT_pct20.json"
 
-[measure]
-measure_scores=["get_log_spanning_forests","get_isoperimetric_score"]
-gamma=0.0
-iso_weight=0.0
-
 [mcmc]
 cycle_walk_steps = 1e4
 two_cycle_walk_frac = 0.1
+
+# The target measure: one [[measure.energy]] block per energy, each weighted by a
+# number or by arithmetic over the parameters named in [measure]. A weight of zero
+# drops its energy, so gamma=0/iso_weight=0 below samples the plain spanning-forest
+# measure; raise either (here, or with --gamma / --iso_weight) to weight the target.
+[measure]
+gamma = 0.0
+iso_weight = 0.0
+
+[[measure.energy]]
+name = "get_log_spanning_forests"
+weight = "gamma"
+
+[[measure.energy]]
+name = "get_isoperimetric_score"
+weight = "iso_weight"
 
 [run]
 thread_id = 1
