@@ -79,6 +79,7 @@ export AbstractGraph,
     build_cycle_walk,
     build_lifted_tree_cycle_walk,
     build_internal_forest_walk,
+    build_bud_walk,
 
     # constraints
     initialize_constraints,
@@ -226,6 +227,7 @@ include("./io/writer.jl")
 
 include("./proposals/lifted_tree_cycle_walk.jl")
 include("./proposals/internal_forest_walk.jl")
+include("./proposals/bud_walk.jl")
 include("./chains/chain.jl")
 include("./chains/mcmc.jl")
 
