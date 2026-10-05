@@ -18,30 +18,6 @@ Canonicalized key for a weighted graph edge.
 end
 
 """
-    lct_neighbors_huh(partition, u, v)
-
-Compatibility wrapper for LinkCutTreesAugmented's `neighbors_huh`. If the 
-    updated API is unavailable, falls back to checking whether the unique tree 
-    path has length 2.
-"""
-function lct_neighbors_huh(
-    partition::LinkCutPartition,
-    u::Int,
-    v::Int,
-)::Bool
-    if isdefined(LinkCutTreesAugmented, :neighbors_huh)
-        neighbors_huh = getfield(LinkCutTreesAugmented, :neighbors_huh)
-        return neighbors_huh(u, v, partition.lct)
-    end
-
-    u_node = partition.lct.nodes[u]
-    v_node = partition.lct.nodes[v]
-    evert!(u_node)
-    expose!(v_node)
-    return length(findPath(v_node)) == 2
-end
-
-"""
     sample_non_lct_edge(partition, rng; forbidden_edges=Set())
 
 Draw a uniformly random graph edge whose endpoints are not adjacent in the 
@@ -57,7 +33,7 @@ function sample_non_lct_edge(
         u, v = collect(e)
         uv_key = ordered_edge_key(u, v)
         uv_key in forbidden_edges && continue
-        lct_neighbors_huh(partition, u, v) && continue
+        neighbors_huh(partition.lct[u], partition.lct[v]) && continue
         return uv_key
     end
 end
@@ -130,31 +106,6 @@ function sample_weighted_edge(
 end
 
 """
-    sample_cross_edges_from_quotient_tree(partition, quotient_tree, rng)
-
-For each district-edge of `quotient_tree`, select one concrete cross-district 
-edge from the corresponding edge set, weighted by edge weight.
-"""
-function sample_cross_edges_from_quotient_tree(
-    partition::LinkCutPartition,
-    quotient_tree::Vector{Edge{Int}},
-    rng::AbstractRNG,
-)
-    sampled = Vector{eltype(first(values(partition.cross_district_edges)))}(
-        undef,
-        length(quotient_tree),
-    )
-    for (ii, qe) in enumerate(quotient_tree)
-        dist_pair = ordered_edge_key(src(qe), dst(qe))
-        sampled[ii] = sample_weighted_edge(
-            partition.cross_district_edges[dist_pair],
-            rng,
-        )
-    end
-    return sampled
-end
-
-"""
     link_sampled_cross_edges!(partition, sampled_cross_edges)
 
 Temporarily link the sampled cross-district edges into the link-cut forest to
@@ -162,9 +113,9 @@ realize the district-tree augmentation used for the BUD cycle construction.
 Returns the linked endpoint pairs so callers can undo the edits with
 [`unlink_sampled_cross_edges!`](@ref).
 """
-function link_sampled_cross_edges!(
+function link_quotient_path!(
     partition::LinkCutPartition,
-    sampled_cross_edges::Vector{<:SimpleWeightedEdge},
+    sampled_cross_edges::Dict
 )::Vector{Tuple{Int, Int}}
     linked = Vector{Tuple{Int, Int}}(undef, 0)
     for e in sampled_cross_edges
@@ -177,6 +128,75 @@ function link_sampled_cross_edges!(
         push!(linked, (u, v))
     end
     return linked
+end
+
+"""
+    specify_quotient_path!(partition, specified_cross_edges, quotient_path, rng)
+
+For each consecutive pair of districts `(d1, d2)` along `quotient_path` (a
+vector of quotient-tree `Node`s whose `vertex` is the district), ensure a
+cross-district edge is specified in `specified_cross_edges` (keyed by
+`Edge(d1,d2)` in either orientation).
+
+Pairs already specified are left untouched. Otherwise an edge is drawn with
+[`sample_weighted_edge`](@ref) from `partition.cross_district_edges` and stored
+under `Edge(d1, d2)` as a sorted `(u, v)` tuple. Nothing is linked; see
+[`add_specified_edges!`](@ref).
+"""
+function specify_quotient_path!(
+    partition::LinkCutPartition,
+    specified_cross_edges::Dict{Edge{Int}, Tuple{Int, Int}},
+    quotient_path::AbstractVector{<:Node},
+    rng::AbstractRNG,
+)
+    for i in 1:length(quotient_path)-1
+        d1 = quotient_path[i].vertex
+        d2 = quotient_path[i+1].vertex
+        key = Edge(d1, d2)
+        if haskey(specified_cross_edges, key) ||
+           haskey(specified_cross_edges, reverse(key))
+            continue
+        end
+        dist_pair = haskey(partition.cross_district_edges, (d1, d2)) ?
+                    (d1, d2) : (d2, d1)
+        edgeset = partition.cross_district_edges[dist_pair]
+        specified_cross_edges[key] = ordered_edge_key(
+                                         sample_weighted_edge(edgeset, rng))
+    end
+    return specified_cross_edges
+end
+
+"""
+    add_specified_edges!(partition, specified_cross_edges, quotient_path)
+
+Link into `partition.lct` the specified cross-district edge for each
+consecutive district pair along `quotient_path` (looked up in
+`specified_cross_edges` in either orientation). Only edges on the path are
+linked.
+
+Returns the linked endpoint pairs, in order, so callers can undo the links with
+[`unlink_sampled_cross_edges!`](@ref). If a link fails partway, the links made
+so far are undone before the error is rethrown.
+"""
+function add_specified_edges!(
+    partition::LinkCutPartition,
+    specified_cross_edges::Dict{Edge{Int}, Tuple{Int, Int}},
+    quotient_path::AbstractVector{<:Node},
+)::Vector{Tuple{Int, Int}}
+    for i in 1:length(quotient_path)-1
+        d1 = quotient_path[i].vertex
+        d2 = quotient_path[i+1].vertex
+        key = haskey(specified_cross_edges, Edge(d1, d2)) ? Edge(d1, d2) :
+                                                            Edge(d2, d1)
+        haskey(specified_cross_edges, key) || throw(ArgumentError(
+            "no specified cross edge for districts ($d1, $d2)"))
+        u, v = specified_cross_edges[key]
+        u_node = partition.lct.nodes[u]
+        v_node = partition.lct.nodes[v]
+        evert!(u_node)
+        link!(u_node, v_node)
+        push!(linked, (u, v))
+    end
 end
 
 """
@@ -205,56 +225,53 @@ With the quotient-tree links already present, return the tree path between the
 endpoints of `edge`; adding `edge` would close this path into the proposal cycle.
 """
 function get_cycle_path_for_edge!(
-    partition::LinkCutPartition,
+    lct::LinkCutTree,
     edge::Tuple{Int, Int},
 )::Vector{<:Node}
-    u_node = partition.lct.nodes[edge[1]]
-    v_node = partition.lct.nodes[edge[2]]
+    u_node = lct.nodes[edge[1]]
+    v_node = lct.nodes[edge[2]]
     evert!(u_node)
     expose!(v_node)
     return findPath(v_node)
 end
 
 """
-    get_collapsed_cycle_weights_path(path, partition; field=partition.graph.pop_col)
+    get_cycle_path_for_edge!(partition, edge)
 
-Collapsed per-segment population weights for the single cycle induced by `path`
-plus its closing proposal edge. The result length equals `length(path)` and sums to
-the total population on the linked cycle component.
+With the quotient-tree links already present, return the tree path between the
+endpoints of `edge`; adding `edge` would close this path into the proposal cycle.
+"""
+function get_cycle_path_for_edge!(
+    partition::LinkCutPartition,
+    edge::Tuple{Int, Int},
+)::Vector{<:Node}
+    return get_cycle_path_for_edge!(partition.lct, edge)
+end
+
+"""
+    get_collapsed_cycle_weights_path(path, cut_remainder)
+
+Collapsed cycle weights for a single tree `path` (ordered root-first, i.e. from
+the vertex the tree was rooted at by [`topological_sort`](@ref) to the other
+endpoint of the closing edge). `cut_remainder[v]` is the weight of the subtree
+below `v`, so entry `i` is `cut_remainder[path[i]] - cut_remainder[path[i+1]]`
+(the last entry is just `cut_remainder[path[end]]`): the weight of `path[i]` plus
+everything hanging off it away from the path. The entries sum to the total
+weight of the tree.
 """
 function get_collapsed_cycle_weights_path(
-    path::Vector{<:Node},
-    partition::LinkCutPartition;
-    field=partition.graph.pop_col,
+    path::AbstractVector{<:Node},
+    cut_remainder::Dict{Int, Float64},
 )::Vector{Float64}
-    n = length(path)
-    n < 2 && return Float64[]
-
-    collapsed = Vector{Float64}(undef, n)
-    path_root = partition.lct.nodes[path[1].vertex]
-
-    if field == partition.graph.pop_col
-        evert!(path_root)
-        cut_mass = Vector{Float64}(undef, n)
-        for ii in 1:n
-            cut_mass[ii] = subtree_pop(partition.lct.nodes[path[ii].vertex])
+    m = length(path)
+    weights = Vector{Float64}(undef, m)
+    for i in 1:m
+        weights[i] = cut_remainder[path[i].vertex]
+        if i < m
+            weights[i] -= cut_remainder[path[i+1].vertex]
         end
-        collapsed[1] = cut_mass[1] - cut_mass[2]
-        for ii in 2:n-1
-            collapsed[ii] = cut_mass[ii] - cut_mass[ii + 1]
-        end
-        collapsed[n] = cut_mass[n]
-        return collapsed
     end
-
-    cut_mass = topological_sort(path_root, partition; field=field)
-    total = cut_mass[path[1].vertex]
-    collapsed[1] = total - cut_mass[path[2].vertex]
-    for ii in 2:n-1
-        collapsed[ii] = cut_mass[path[ii].vertex] - cut_mass[path[ii + 1].vertex]
-    end
-    collapsed[n] = cut_mass[path[n].vertex]
-    return collapsed
+    return weights
 end
 
 """
@@ -271,20 +288,25 @@ function edge_supports_all_k_splits(
     k::Int,
     min_pop::Float64,
     max_pop::Float64,
+    total_pop::Float64
 )::Bool
     m = length(cycle_weights)
     (m < 2 || k < 2) && return false
 
     found = falses(k - 1)
     remaining = k - 1
-    total_pop = sum(cycle_weights)
     idx = (edge_ind == m) ? 1 : (edge_ind + 1)
     cur_pop = 0.0
 
     for _ in 1:(m - 1)
         cur_pop += cycle_weights[idx]
+
+        k < ceil(cur_pop/max_pop)
+
         other_pop = total_pop - cur_pop
-        for t in 1:k-1
+        st_idx = int(ceil((cur_pop-1)/max_pop))
+        end_idx = k - int(ceil((total_pop - (cur_pop+1))/max_pop))
+        for t in st_idx:end_idx
             found[t] && continue
             lower_t = t * min_pop
             upper_t = t * max_pop
@@ -318,13 +340,47 @@ function find_candidate_cycle_cut_edges(
 
     min_pop = Float64(constraints.population_constraint.min_pop)
     max_pop = Float64(constraints.population_constraint.max_pop)
+    tot_pop = sum(cycle_weights)
     candidates = Int[]
     for ei in 1:m
-        if edge_supports_all_k_splits(cycle_weights, ei, k, min_pop, max_pop)
+        if edge_supports_all_k_splits(cycle_weights, ei, k, min_pop, max_pop, 
+                                      tot_pop)
             push!(candidates, ei)
         end
     end
     return candidates
+end
+
+"""
+    build_quotient_lct(edges; safeflag=true)
+
+Build a `LinkCutTree` on vertices `1:length(edges)+1` whose edges are `edges`
+(anything with `src`/`dst`, e.g. a Wilson quotient tree).
+
+With `safeflag=true` (default) every add is validated: endpoints must lie in
+`1:length(edges)+1`, no edge may be a self-loop, and no edge may join two
+vertices that are already connected. Since a tree on `n` vertices has `n-1`
+edges, passing all checks means `edges` is a spanning tree. Violations throw an
+`ArgumentError`. Set `safeflag=false` to skip the checks when the input is
+known to be a tree.
+"""
+function build_quotient_lct(edges::AbstractVector; safeflag::Bool=true)
+    n = length(edges) + 1
+    lct = LinkCutTree{Int}(n)
+    for e in edges
+        u, v = src(e), dst(e)
+        if safeflag
+            (1 <= u <= n && 1 <= v <= n) || throw(ArgumentError(
+                "edge ($u, $v) has an endpoint outside 1:$n"))
+            u == v && throw(ArgumentError("self-loop at vertex $u"))
+            find_root!(lct.nodes[u]) === find_root!(lct.nodes[v]) &&
+                throw(ArgumentError(
+                    "edge ($u, $v) closes a cycle; edges are not a tree"))
+        end
+        evert!(lct.nodes[u])
+        link!(lct.nodes[u], lct.nodes[v])
+    end
+    return lct
 end
 
 """
@@ -359,42 +415,49 @@ function bud_walk!(
 
     qg, _ = build_district_quotient_graph(partition)
     quotient_tree = wilson_rst(qg, rng, weights(qg))
-    k = length(quotient_tree) + 1
-    sampled_cross_edges = sample_cross_edges_from_quotient_tree(
-        partition,
-        quotient_tree,
-        rng,
-    )
+    
+    specified_cross_edges = Dict{Edge{Int}, Tuple{Int, Int}}()
 
-    # Track weighted district-tree count for future forward/backward proposal 
-    # terms.
-    log_weighted_qtree_count = log_nspanning(qg)
-
-    sampled_cross_edge_keys = Set{Tuple{Int, Int}}(
-        ordered_edge_key(e) for e in sampled_cross_edges
-    )
-    if edge in sampled_cross_edge_keys
+    while true
+        specified_edge = sample_weighted_edge(
+                                  partition.cross_district_edges[(d1, d2)], rng)
+        specified_edge = ordered_edge_key(specified_edge)
+        specified_cross_edges[Edge(d1, d2)] = ordered_edge_key(specified_edge)
+        if specified_edge != ordered_edge_key(edge)
+            break
+        end
         edge = sample_non_lct_edge(partition, rng;
-                                   forbidden_edges=sampled_cross_edge_keys)
+                                   forbidden_edges=keys(specified_cross_edges))
         d1 = partition.node_to_dist[edge[1]]
         d2 = partition.node_to_dist[edge[2]]
+        d1 == d2 && return internal_forest_walk!(partition, rng;
+                                                 diagnostics=diagnostics,
+                                                 edge=edge)
     end
-    d1 == d2 && return internal_forest_walk!(partition, rng;
-                                             diagnostics=diagnostics,
-                                             edge=edge)
+    log_weighted_qtree_count = log_nspanning(qg)
+
 #####
-    linked_cross_edges = link_sampled_cross_edges!(partition, sampled_cross_edges)
-    cycle_weights = Float64[]
-    candidate_cut_edges = Int[]
-    try
-        cycle_path = get_cycle_path_for_edge!(partition, edge)
-        cycle_weights = get_collapsed_cycle_weights_path(cycle_path, partition)
-        candidate_cut_edges = find_candidate_cycle_cut_edges(cycle_weights,
-                                                             k,
-                                                             constraints)
-    finally
-        unlink_sampled_cross_edges!(partition, linked_cross_edges)
-    end
+    ## TODO: store the quotient_tree as an lct, then find the impacted districts
+    ##       and only specify/link those edges (don't do the whole thing)
+    quotient_lct = build_quotient_lct(quotient_tree; safeflag=false)
+    quotient_path = get_cycle_path_for_edge!(quotient_lct, (d1, d2))
+    k = length(quotient_path)
+    specify_quotient_path!(partition, specified_cross_edges, quotient_path, rng)
+    linked_cross_edges = add_specified_edges!(partition, specified_cross_edges,
+                                              quotient_path)
+    
+    u1, u2 = partition.lct[src(edge)], partition.lct[dst(edge)]
+    evert!(u1)
+    expose!(u2)
+    path = findPath(u2)
+    cut_remainder = topological_sort(u1, partition)
+    cycle_weights = get_collapsed_cycle_weights_path(path, cut_remainder)
+    
+    candidate_cut_edges = find_candidate_cycle_cut_edges(cycle_weights, k,
+                                                         constraints)
+    # finally
+    #     unlink_sampled_cross_edges!(partition, linked_cross_edges)
+    # end
 
     # This is the per-edge probability under the sampling model.
     num_non_tree_edges = ne(partition.graph.simple_graph) -
