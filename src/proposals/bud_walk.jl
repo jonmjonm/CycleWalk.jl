@@ -18,6 +18,23 @@ Canonicalized key for a weighted graph edge.
 end
 
 """
+    has_edge(v, e)
+"""
+@inline function has_edge(v::Vector{E}, e::E)::Bool where E <: Edge
+    return e ∈ v || reverse(e) ∈ v
+end
+
+"""
+    has_edge(v, e)
+"""
+@inline function has_edge(
+    v::Vector{E}, 
+    e::Tuple{T, T}
+)::Bool where {E <: Edge, T <: Int}
+    return has_edge(v, Edge(e[1], e[2]))
+end
+
+"""
     sample_non_lct_edge(partition, rng; forbidden_edges=Set())
 
 Draw a uniformly random graph edge whose endpoints are not adjacent in the 
@@ -384,6 +401,50 @@ function build_quotient_lct(edges::AbstractVector; safeflag::Bool=true)
 end
 
 """
+    specify_cross_edges!(specified_cross_edges, partition, rng, edge)
+
+Specify the cross-district edge for the district pair of the sampled non-tree
+`edge`, ensuring the specified edge differs from `edge` itself. If it coincides,
+`edge` is resampled (never choosing an already specified edge) and the process
+repeats for the new edge's district pair.
+
+`specified_cross_edges` (keyed by `Edge(d1,d2)`, looked up in either
+orientation) is updated in place; existing specifications are reused. Returns
+`(edge, (d1, d2))` for the final `edge`. If the resampled edge is internal
+(`d1 == d2`) it is returned immediately, unspecified, so the caller can run an
+internal forest walk.
+"""
+function specify_cross_edges!(
+    specified_cross_edges::Dict{Edge{T}, Tuple{T, T}},
+    partition::LinkCutPartition,
+    rng::AbstractRNG,
+    edge::Tuple{T, T},
+    dist_pair::Tuple{T, T}
+) where T <: Int
+    d1, d2 = dist_pair
+    while true
+        key = Edge(d1, d2)
+        if haskey(specified_cross_edges, reverse(key))
+            key = reverse(key)
+        end
+        if !haskey(specified_cross_edges, key)
+            dist_pair = haskey(partition.cross_district_edges, (d1, d2)) ?
+                        (d1, d2) : (d2, d1)
+            cross_edges = partition.cross_district_edges[dist_pair]
+            cross_edge = sample_weighted_edge(cross_edges, rng)
+            specified_cross_edges[key] = ordered_edge_key(cross_edge)
+        end
+        specified_cross_edges[key] != edge && return edge, (d1, d2)
+
+        edge = sample_non_lct_edge(partition, rng;
+                       forbidden_edges=Set(values(specified_cross_edges)))
+        d1 = partition.node_to_dist[edge[1]]
+        d2 = partition.node_to_dist[edge[2]]
+        d1 == d2 && return edge, (d1, d2)
+    end
+end
+
+"""
     bud_walk!(partition, constraints, rng; diagnostics=nothing)
 
 Scaffold for a BUD-style proposal:
@@ -408,32 +469,20 @@ function bud_walk!(
     edge = sample_non_lct_edge(partition, rng)
     d1 = partition.node_to_dist[edge[1]]
     d2 = partition.node_to_dist[edge[2]]
-    if d1 == d2
-        return internal_forest_walk!(partition, rng; diagnostics=diagnostics,
-                                     edge=edge)
-    end
+    d1 == d2 && return internal_forest_walk!(partition, rng; 
+                                             diagnostics=diagnostics, edge=edge)
 
     qg, _ = build_district_quotient_graph(partition)
     quotient_tree = wilson_rst(qg, rng, weights(qg))
     
     specified_cross_edges = Dict{Edge{Int}, Tuple{Int, Int}}()
-
-    while true
-        specified_edge = sample_weighted_edge(
-                                  partition.cross_district_edges[(d1, d2)], rng)
-        specified_edge = ordered_edge_key(specified_edge)
-        specified_cross_edges[Edge(d1, d2)] = ordered_edge_key(specified_edge)
-        if specified_edge != ordered_edge_key(edge)
-            break
-        end
-        edge = sample_non_lct_edge(partition, rng;
-                                   forbidden_edges=keys(specified_cross_edges))
-        d1 = partition.node_to_dist[edge[1]]
-        d2 = partition.node_to_dist[edge[2]]
-        d1 == d2 && return internal_forest_walk!(partition, rng;
-                                                 diagnostics=diagnostics,
-                                                 edge=edge)
+    if Edge(d1, d2) ∈ quotient_tree || Edge(d2, d1) ∈ quotient_tree
+        edge, (d1, d2) = specify_cross_edge!(specified_cross_edges, partition,
+                                             rng, edge)
     end
+    d1 == d2 && return internal_forest_walk!(partition, rng;
+                                             diagnostics=diagnostics, edge=edge)
+
     log_weighted_qtree_count = log_nspanning(qg)
 
 #####
@@ -446,18 +495,19 @@ function bud_walk!(
     linked_cross_edges = add_specified_edges!(partition, specified_cross_edges,
                                               quotient_path)
     
-    u1, u2 = partition.lct[src(edge)], partition.lct[dst(edge)]
-    evert!(u1)
-    expose!(u2)
-    path = findPath(u2)
-    cut_remainder = topological_sort(u1, partition)
+    path = get_cycle_path_for_edge!(partition, edge)
+    cut_remainder = topological_sort(path[1], partition)
     cycle_weights = get_collapsed_cycle_weights_path(path, cut_remainder)
     
     candidate_cut_edges = find_candidate_cycle_cut_edges(cycle_weights, k,
                                                          constraints)
-    # finally
-    #     unlink_sampled_cross_edges!(partition, linked_cross_edges)
-    # end
+
+    # TODO:
+        # - pick a plausible edge
+        # - check if the tree is cuttable
+        # - use the random partition to compute forward and backward probabilities
+
+    # unlink_sampled_cross_edges!(partition, linked_cross_edges)
 
     # This is the per-edge probability under the sampling model.
     num_non_tree_edges = ne(partition.graph.simple_graph) -
