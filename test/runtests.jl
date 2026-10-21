@@ -64,7 +64,7 @@ add_constraint!(measure_constraints,
 include(joinpath(testdir, "test_linkcuttree.jl"))
 include(joinpath(testdir, "test_option_b.jl"))
 include(joinpath(testdir, "test_cuttable_edges.jl"))
-# include(joinpath(testdir, "test_bud_walk_helpers.jl"))
+include(joinpath(testdir, "test_bud_walk_helpers.jl"))
 include(joinpath(testdir, "test_annealed_importance_sampling.jl"))
 include(joinpath(testdir, "test_annealed_smc.jl"))
 include(joinpath(testdir, "test_parallel_tempering.jl"))
