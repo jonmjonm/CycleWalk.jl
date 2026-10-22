@@ -272,6 +272,7 @@ function cut_cross_district_edges!(
     # Every cut endpoint lies in a district on the path, and every such district
     # has an endpoint of a cut edge, so this covers all of the affected roots.
     # Drop all stale root entries first so a deletion cannot clobber a new entry.
+    ## TO DO: Clean this up -- I don't need the reallocation in the middle for loop
     new_roots = Dict{Int, Int}() # district => new root vertex
     for (u, v) in cut_edges, w in (u, v)
         new_roots[partition.node_to_dist[w]] =
@@ -373,8 +374,8 @@ function edge_supports_all_k_splits(
         k < ceil(cur_pop/max_pop)
 
         other_pop = total_pop - cur_pop
-        st_idx = int(ceil((cur_pop-1)/max_pop))
-        end_idx = k - int(ceil((total_pop - (cur_pop+1))/max_pop))
+        st_idx = Int(ceil((cur_pop-1)/max_pop))
+        end_idx = k - Int(ceil((total_pop - (cur_pop+1))/max_pop))
         for t in st_idx:end_idx
             found[t] && continue
             lower_t = t * min_pop
@@ -541,11 +542,13 @@ function peel_cycle_districts(
     f_lo, f_hi = 1, forced_cuts === nothing ? 0 : length(forced_cuts)
     cuts = Int[]
     log_prob = 0.0
+    @show "here"
     while j > 1
         left = labels[a] < labels[b]
         cands = Int[]
         if left # peel nodes a..c; nodes c+1..b must split into j-1
             reach = path_boundary_reach(S, a-1, b, j-1, min_pop, max_pop, false)
+            @show reach
             for c in a:(b-1)
                 pop = S[c+1] - S[a]
                 reach[c+1] && min_pop <= pop <= max_pop && push!(cands, c)
@@ -754,7 +757,7 @@ function bud_walk!(
     
     specified_cross_edges = Dict{Edge{Int64}, Tuple{Int64, Int64}}()
     edge, (d1, d2) = get_valid_cross_edge!(specified_cross_edges, partition, 
-                                           quotient_tree, edge, dist_pair, rng)
+                                           quotient_tree, edge, (d1, d2), rng)
     d1 == d2 && return internal_forest_walk!(partition, rng;
                                              diagnostics=diagnostics, edge=edge)
 
@@ -778,10 +781,11 @@ function bud_walk!(
                                                          constraints)
 
     cut_ind, p_cut = sample_inverse_weight_cycle_edge(partition, path,
-                                                      candidate_cut_edges, edge,
-                                                      rng)
-    if cut_ind == 0
-        cut_cross_district_edges!(partition, quotient_path, specified_cross_edges)
+                                                      candidate_cut_edges, 
+                                                      edge, rng)
+    if cut_ind == length(cycle_weights)
+        cut_cross_district_edges!(partition, quotient_path, 
+                                  specified_cross_edges)
         return 0, nothing
     end
 
