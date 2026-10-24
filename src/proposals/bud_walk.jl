@@ -535,7 +535,7 @@ function select_next_cut(
     total > 0 || return nothing
 
     if forced !== nothing
-        (plo <= forced <= phi) || return nothing
+        (plo <= forced <= phi) || @assert false "Can only select a valid cut"
         w = table_weight(tab, t - 1, forced)
         w > 0 || return nothing
         return forced, log(w / total)
@@ -733,9 +733,8 @@ function select_cycle_cuts(
 
     # find all possible cuts
     dptab = rotated_cut_table(cut_data.node_pops, cut_data.inv_w, e, 
-                              cut_data.districts, cut_data.min_pop, 
-                              cut_data.max_pop)
-    
+                              cut_data.districts, (cut_data.min_pop, 
+                              cut_data.max_pop))
     @assert dptab !== nothing
     boundaries = Int[]
     cur_ind = cut_data.path_len
@@ -744,9 +743,9 @@ function select_cycle_cuts(
         step_ind, step_log_prob  = select_next_cut(dptab, cur_ind, t, rng)
         log_prob += step_log_prob
         step_ind > 0 && push!(boundaries, mod1(e + step_ind, cut_data.path_len))
-        q = step_ind
+        cur_ind = step_ind
     end
-    log_prob += log(1.0/cut_data.inv_w[e])
+    log_prob += log(cut_data.inv_w[e])
     sort!(boundaries)
     return (e, boundaries), log_prob#_cut_collection(cut_data, boundaries)
 end
