@@ -838,6 +838,155 @@ end
     
 
 """
+    cycle_edge_vertices(path, i)
+
+Vertex pair of cycle edge `i`: edge `i < length(path)` joins `path[i]` and
+`path[i+1]`, and edge `length(path)` is the closing non-tree edge joining the two
+ends of the path.
+"""
+@inline function cycle_edge_vertices(path::AbstractVector{<:Node}, i::Int)
+    m = length(path)
+    return i < m ? [path[i].vertex, path[i+1].vertex] :
+                   [path[m].vertex, path[1].vertex]
+end
+
+"""
+    get_links_and_cuts(path, old_boundaries, new_boundaries)
+
+Edge edits that take the current forest to the proposed one. Each boundary
+argument is `(removed_edge, marked_edges)` in cycle edge indices. Old boundaries
+that are not new boundaries become links, and new boundaries that are not old
+boundaries become cuts; boundaries in both are omitted from both lists.
+"""
+function get_links_and_cuts(
+    path::AbstractVector{<:Node},
+    old_boundaries::Tuple{Int, Vector{Int}},
+    new_boundaries::Tuple{Int, Vector{Int}},
+)
+    old_set = Set(vcat(old_boundaries[1], old_boundaries[2]))
+    new_set = Set(vcat(new_boundaries[1], new_boundaries[2]))
+    links = [cycle_edge_vertices(path, i) for i in sort!(collect(setdiff(old_set, new_set)))]
+    cuts = [cycle_edge_vertices(path, i) for i in sort!(collect(setdiff(new_set, old_set)))]
+    return links, cuts
+end
+
+"""
+    update_log_proposal_ratio!(log_p, log_qtree_count_old, partition, path,
+                               old_marked_edges, new_boundaries, links, cuts,
+                               constraints)
+
+Score a BUD proposal. Must be called while the quotient-path cross edges are
+linked, so the lct holds the merged cycle tree. The proposed forest is reached by
+cutting the new boundaries that lie on the path and linking the closing edge if it
+is not a new boundary. Component `j` along the path takes the old label of piece
+`j` (the component joined across the closing edge takes the label of piece 0).
+
+Returns `(log_p, update)` with `log_p` increased by
+`log_qtree_count_old - log_qtree_count_new`, or `(-Inf, nothing)` if the
+constraints fail. The lct, `district_roots` and `roots_to_district` are restored
+to the merged-tree state, and `node_to_dist_update` holds the proposed assignment
+on success.
+"""
+function update_log_proposal_ratio!(
+    log_p::Float64,
+    log_qtree_count_old::Float64,
+    partition::LinkCutPartition,
+    path::AbstractVector{<:Node},
+    old_marked_edges::Vector{Int},
+    new_boundaries::Vector{Int},
+    links::Vector{Vector{Int}},
+    cuts::Vector{Vector{Int}},
+    constraints::Constraints,
+)
+    m = length(path)
+    nodes = partition.lct.nodes
+    node_to_dist = partition.node_to_dist
+
+    # old labels of the pieces along the path
+    old_sorted = sort(old_marked_edges)
+    labels = [node_to_dist[path[1].vertex];
+              [node_to_dist[path[i+1].vertex] for i in old_sorted]]
+    k = length(labels)
+    changed = Tuple(sort(labels))
+
+    new_path_cuts = sort([b for b in new_boundaries if b < m])
+    closing_is_boundary = m in new_boundaries
+    piece_starts = [1; [p + 1 for p in new_path_cuts]]
+    piece_labels = [labels[min(j, k)] for j in 1:length(piece_starts)]
+    # without a closing boundary the last piece is joined to piece 0 across `m`
+    !closing_is_boundary && (piece_labels[end] = labels[1])
+
+    old_roots = [partition.district_roots[d] for d in changed]
+
+    # tentative forest
+    for p in new_path_cuts
+        evert!(nodes[path[p].vertex])
+        cut!(nodes[path[p+1].vertex])
+    end
+    if !closing_is_boundary
+        evert!(nodes[path[m].vertex])
+        link!(nodes[path[m].vertex], nodes[path[1].vertex])
+    end
+
+    for r in old_roots
+        delete!(partition.roots_to_district, r)
+    end
+    for (s, d) in zip(piece_starts, piece_labels)
+        r = find_root!(nodes[path[s].vertex]).vertex
+        partition.district_roots[d] = r
+        partition.roots_to_district[r] = d
+    end
+
+    partition.node_to_dist_update .= partition.node_to_dist
+    assign_district_map!(partition, collect(changed), update = true)
+    new_cross_d_edg = Dict{Tuple{Int64,Int64}, Set{SimpleWeightedEdge}}()
+    find_cross_district_edges!(partition, collect(changed), new_cross_d_edg,
+                               update=true)
+    update = Update(changed, links, cuts, new_cross_d_edg, false)
+
+    energy_data_snapshot = deepcopy(partition.energy_data)
+    constraints_ok = satisfies_constraints(partition, constraints,
+                                           collect(changed); update=update)
+    partition.energy_data = energy_data_snapshot
+
+    log_qtree_count_new = -Inf
+    if constraints_ok
+        merged = Dict{Tuple{Int64,Int64}, Set{SimpleWeightedEdge}}()
+        for (key, edgeset) in partition.cross_district_edges
+            (key[1] in changed || key[2] in changed) && continue
+            merged[key] = edgeset
+        end
+        merge!(merged, new_cross_d_edg)
+        qg_new, _ = build_district_quotient_graph(partition.num_dists, merged)
+        log_qtree_count_new = log_nspanning(qg_new)
+    else
+        partition.node_to_dist_update .= partition.node_to_dist
+    end
+
+    # revert to the merged tree; cut the closing edge before relinking so no
+    # link joins two nodes of the same tree
+    if !closing_is_boundary
+        evert!(nodes[path[m].vertex])
+        cut!(nodes[path[1].vertex])
+    end
+    for p in new_path_cuts
+        u = nodes[path[p].vertex]
+        evert!(u)
+        link!(u, nodes[path[p+1].vertex])
+    end
+    for d in changed
+        delete!(partition.roots_to_district, partition.district_roots[d])
+    end
+    for (d, r) in zip(changed, old_roots)
+        partition.district_roots[d] = r
+        partition.roots_to_district[r] = d
+    end
+
+    constraints_ok || return -Inf, nothing
+    return log_p + log_qtree_count_old - log_qtree_count_new, update
+end
+
+"""
     bud_walk!(partition, constraints, rng; diagnostics=nothing)
 
 Scaffold for a BUD-style proposal:
@@ -902,21 +1051,31 @@ function bud_walk!(
     old_marked_edges = [i for i in 1:(m-1) if partition.node_to_dist[path[i].vertex] !=
                                               partition.node_to_dist[path[i+1].vertex]]
     log_prob_reverse_mark = log_prob_cut_route(cut_data, m, old_marked_edges)
-    if log_prob_reverse_mark == -Inf
+    @assert log_prob_reverse_mark > -Inf
+    
+
+    #### proposal ratio is what: I still need ratio of quotient district graphs
+    log_p = log_prob_reverse_mark - log_prob_forward_mark
+    # The lifted weight w(F)w(M) is the weight of the spanning tree F ∪ M, and
+    # the move swaps cut_e out of that tree and `edge` in.
+    log_p += log(cut_data.inv_w[cut_e]) - log(cut_data.inv_w[m])
+    
+    links, cuts = get_links_and_cuts(path, (m, old_marked_edges), 
+                                     (cut_e, new_marked_edges),)
+    @assert length(links) == length(cuts) 
+    if length(links) == 0
         cut_cross_district_edges!(partition, quotient_path, 
                                   specified_cross_edges)
         return 0, nothing
     end
     
-    log_p = log_prob_reverse_mark - log_prob_forward_mark
-
-    #### proposal ratio is what: I still need ratio of quotient district graphs
-    log_weighted_qtree_count_old = log_nspanning(qg)
-    log_weighted_qtree_count_new, update = get_proposed_log_nspanning()
-
-    log_p += log_weighted_qtree_count_old - log_weighted_qtree_count_new
+    log_qtree_count_old = log_nspanning(qg)
+    log_p, update = update_log_proposal_ratio!(
+        log_p, log_qtree_count_old, partition, path, old_marked_edges,
+        vcat(cut_e, new_marked_edges), links, cuts, constraints)
 
     cut_cross_district_edges!(partition, quotient_path, specified_cross_edges)
+    update === nothing && return 0, nothing
     return exp(log_p), update
 end
 
