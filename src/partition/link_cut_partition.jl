@@ -336,6 +336,72 @@ function _find_cross_district_edges!(
 end
 
 """
+    find_cross_district_edges_moved(partition, changed_districts, moved)
+
+Incremental version of [`find_cross_district_edges!`](@ref) for a proposal in which
+only the nodes in `moved` change label (`node_to_dist_update` holds the proposed
+labels, and every moved node lies in `changed_districts`). Returns the cross-district
+edge sets for every pair touching a changed district, as `find_cross_district_edges!`
+would for the changed districts: the current edges that touch no moved node are kept
+(in fresh sets, since the current ones must survive a rejection) and the edges at
+moved nodes are re-read from the graph under the proposed labels. Cost is the
+current boundary of the changed districts plus the neighborhoods of the moved nodes.
+"""
+function find_cross_district_edges_moved(
+    lcp::LinkCutPartition,
+    changed_districts::Tuple{Vararg{Int}},
+    moved::Vector{Int},
+)
+    # function barrier: the weight matrix is only concretely typed at runtime
+    return _find_cross_district_edges_moved(
+        lcp, changed_districts, moved, weights(lcp.graph.simple_graph))
+end
+
+function _find_cross_district_edges_moved(
+    lcp::LinkCutPartition,
+    changed_districts::Tuple{Vararg{Int}},
+    moved::Vector{Int},
+    wmat,                       # SparseMatrixCSC; untyped so no SparseArrays import
+)
+    node_to_dist = lcp.node_to_dist_update
+    is_moved = falses(length(node_to_dist))
+    for v in moved
+        is_moved[v] = true
+    end
+
+    new_cross_d_edg = Dict{Tuple{Int,Int}, Set{SimpleWeightedEdge}}()
+    for (key, edgeset) in lcp.cross_district_edges
+        (key[1] in changed_districts || key[2] in changed_districts) || continue
+        kept = Set{SimpleWeightedEdge}()
+        for e in edgeset
+            (is_moved[e.src] || is_moved[e.dst]) && continue
+            push!(kept, e)
+        end
+        isempty(kept) || (new_cross_d_edg[key] = kept)
+    end
+
+    colptr = wmat.colptr
+    rowval = wmat.rowval
+    nzval = wmat.nzval
+    for v in moved
+        dv = node_to_dist[v]
+        for k in colptr[v]:(colptr[v + 1] - 1)
+            n = rowval[k]
+            w = nzval[k]
+            w == 0 && continue
+            dn = node_to_dist[n]
+            dn == dv && continue
+            # both ends moved: record the edge once, from the smaller vertex
+            (is_moved[n] && n < v) && continue
+            edgeset = get!(() -> Set{SimpleWeightedEdge}(), new_cross_d_edg,
+                           (min(dv, dn), max(dv, dn)))
+            push!(edgeset, SimpleWeightedEdge(v, n, w))
+        end
+    end
+    return new_cross_d_edg
+end
+
+"""
     assign_district_map!(partition, districts=1:partition.num_dists; update=false)
 
 Walk each district's link-cut tree from its root and write that district's index

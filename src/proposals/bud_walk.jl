@@ -345,6 +345,32 @@ function get_collapsed_cycle_weights_path(
 end
 
 """
+    get_collapsed_cycle_weights_path(path, partition)
+
+Population-only fast path of [`get_collapsed_cycle_weights_path`](@ref). Roots
+the tree at `path[1]` and reads each path vertex's subtree population from the
+maintained sums of the augmented link-cut tree (`O(log n)` each) instead of
+sorting the whole merged tree, so the cost depends on the length of the path
+rather than on the number of nodes in the cycle's districts.
+"""
+function get_collapsed_cycle_weights_path(
+    path::AbstractVector{<:Node},
+    partition::LinkCutPartition,
+)::Vector{Float64}
+    lct = partition.lct
+    m = length(path)
+    evert!(lct.nodes[path[1].vertex])
+    weights = Vector{Float64}(undef, m)
+    next_pop = 0.0
+    for i in m:-1:1
+        cur_pop = subtree_pop(lct.nodes[path[i].vertex])
+        weights[i] = cur_pop - next_pop
+        next_pop = cur_pop
+    end
+    return weights
+end
+
+"""
     edge_supports_all_k_splits(cycle_weights, edge_ind, k, min_pop, max_pop)
 
 Check the cheaper BUD criterion requested by the user: starting from cut edge
@@ -871,6 +897,73 @@ function get_links_and_cuts(
 end
 
 """
+    assign_cycle_district_map!(partition, path, path_labels)
+
+Write the proposed labels into `node_to_dist_update` for the nodes whose label
+changes, and return those nodes. `path_labels[i]` is the new label of `path[i]`,
+and `node_to_dist_update` must already equal `node_to_dist`. Must be called on the
+merged cycle tree, before any tentative cut.
+
+With the tree rooted at `path[1]` and exposed at `path[m]`, the preferred path is
+exactly the cycle path, so every other node lies in a subtree hanging off one path
+vertex (a virtual child of it) and shares that vertex's piece. Only the subtrees of
+path vertices whose label changes are traversed, so the cost is the number of
+relabeled nodes plus `m` rather than the size of the changed districts.
+"""
+function assign_cycle_district_map!(
+    partition::LinkCutPartition,
+    path::AbstractVector{<:Node},
+    path_labels::Vector{Int},
+)
+    nodes = partition.lct.nodes
+    m = length(path)
+    evert!(nodes[path[1].vertex])
+    expose!(nodes[path[m].vertex])
+    # function barrier: the node type is only concrete at runtime
+    return _assign_cycle_district_map!(nodes, path, path_labels,
+                                       partition.node_to_dist,
+                                       partition.node_to_dist_update)
+end
+
+function _assign_cycle_district_map!(
+    nodes::Vector{Union{Nothing, N}},
+    path::AbstractVector{<:Node},
+    path_labels::Vector{Int},
+    node_to_dist::Vector{Int},
+    node_to_dist_update::Vector{Int},
+) where {N<:Node}
+    m = length(path)
+    moved = Int[]
+    stack = N[]
+    for i in 1:m
+        v = path[i].vertex
+        new_label = path_labels[i]
+        node_to_dist[v] == new_label && continue
+        node_to_dist_update[v] = new_label
+        push!(moved, v)
+        c = first_path_child(nodes[v])
+        while c !== nothing
+            push!(stack, c)
+            c = next_path_sibling(c)
+        end
+        while !isempty(stack)
+            node = pop!(stack)
+            node_to_dist_update[node.vertex] = new_label
+            push!(moved, node.vertex)
+            for ii = 1:2
+                node.children[ii] !== nothing && push!(stack, node.children[ii])
+            end
+            c = first_path_child(node)
+            while c !== nothing
+                push!(stack, c)
+                c = next_path_sibling(c)
+            end
+        end
+    end
+    return moved
+end
+
+"""
     update_log_proposal_ratio!(log_p, log_qtree_count_old, partition, path,
                                old_marked_edges, new_boundaries, links, cuts,
                                constraints)
@@ -918,6 +1011,16 @@ function update_log_proposal_ratio!(
 
     old_roots = [partition.district_roots[d] for d in changed]
 
+    # new label of every path vertex: piece j spans piece_starts[j] up to the next
+    # start (the merged tree is still intact here)
+    path_labels = Vector{Int}(undef, m)
+    for (j, start) in enumerate(piece_starts)
+        stop = j < length(piece_starts) ? piece_starts[j+1] - 1 : m
+        path_labels[start:stop] .= piece_labels[j]
+    end
+    partition.node_to_dist_update .= partition.node_to_dist
+    moved = assign_cycle_district_map!(partition, path, path_labels)
+
     # tentative forest
     for p in new_path_cuts
         evert!(nodes[path[p].vertex])
@@ -937,11 +1040,7 @@ function update_log_proposal_ratio!(
         partition.roots_to_district[r] = d
     end
 
-    partition.node_to_dist_update .= partition.node_to_dist
-    assign_district_map!(partition, collect(changed), update = true)
-    new_cross_d_edg = Dict{Tuple{Int64,Int64}, Set{SimpleWeightedEdge}}()
-    find_cross_district_edges!(partition, collect(changed), new_cross_d_edg,
-                               update=true)
+    new_cross_d_edg = find_cross_district_edges_moved(partition, changed, moved)
     update = Update(changed, links, cuts, new_cross_d_edg, false)
 
     energy_data_snapshot = deepcopy(partition.energy_data)
@@ -951,14 +1050,7 @@ function update_log_proposal_ratio!(
 
     log_qtree_count_new = -Inf
     if constraints_ok
-        merged = Dict{Tuple{Int64,Int64}, Set{SimpleWeightedEdge}}()
-        for (key, edgeset) in partition.cross_district_edges
-            (key[1] in changed || key[2] in changed) && continue
-            merged[key] = edgeset
-        end
-        merge!(merged, new_cross_d_edg)
-        qg_new, _ = build_district_quotient_graph(partition.num_dists, merged)
-        log_qtree_count_new = log_nspanning(qg_new)
+        log_qtree_count_new = get_log_district_trees(partition; update=update)
     else
         partition.node_to_dist_update .= partition.node_to_dist
     end
@@ -1014,7 +1106,7 @@ function bud_walk!(
     d1 == d2 && return internal_forest_walk!(partition, rng; 
                                              diagnostics=diagnostics, edge=edge)
 
-    qg, _ = build_district_quotient_graph(partition)
+    qg = get_district_quotient_graph(partition)
     quotient_tree = wilson_rst(qg, rng, weights(qg))
     
     specified_cross_edges = Dict{Edge{Int64}, Tuple{Int64, Int64}}()
@@ -1031,8 +1123,7 @@ function bud_walk!(
                                               quotient_path)
     
     path = get_cycle_path_for_edge!(partition, edge)
-    cut_remainder = topological_sort(path[1], partition)
-    cycle_weights = get_collapsed_cycle_weights_path(path, cut_remainder)
+    cycle_weights = get_collapsed_cycle_weights_path(path, partition)
 
     cut_data = CycleCutData(cycle_weights, dists_in_cycle, partition, 
                             constraints, path, edge) # cached computations
@@ -1069,7 +1160,7 @@ function bud_walk!(
         return 0, nothing
     end
     
-    log_qtree_count_old = log_nspanning(qg)
+    log_qtree_count_old = get_log_district_trees(partition)
     log_p, update = update_log_proposal_ratio!(
         log_p, log_qtree_count_old, partition, path, old_marked_edges,
         vcat(cut_e, new_marked_edges), links, cuts, constraints)
