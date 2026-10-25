@@ -4,26 +4,17 @@ using SimpleWeightedGraphs
 using RandomNumbers
 using Combinatorics
 
+# From-scratch district quotient graph (summed cross-edge weights per district pair).
+function rebuilt_quotient_graph(partition)
+    g = SimpleWeightedGraph(partition.num_dists)
+    for ((a, b), edgeset) in partition.cross_district_edges
+        add_edge!(g, a, b, sum(e.weight for e in edgeset))
+    end
+    return g
+end
+
 @testset "bud_walk_helpers" begin
     @test CycleWalk.ordered_edge_key(7, 3) == (3, 7)
-
-    cross_edges = Dict{Tuple{Int64, Int64}, Set{SimpleWeightedEdge}}(
-        (1, 2) => Set([
-            SimpleWeightedEdge(1, 2, 2.0),
-            SimpleWeightedEdge(3, 4, 5.0),
-        ]),
-        (2, 3) => Set([
-            SimpleWeightedEdge(5, 6, 1.5),
-        ]),
-    )
-
-    qg, pair_to_qedge = CycleWalk.build_district_quotient_graph(3, cross_edges)
-    @test nv(qg) == 3
-    @test ne(qg) == 2
-    @test qg.weights[1, 2] == 7.0
-    @test qg.weights[2, 3] == 1.5
-    @test src(pair_to_qedge[(1, 2)]) == 1
-    @test dst(pair_to_qedge[(1, 2)]) == 2
 
     rng = PCG.PCGStateOneseq(UInt64, 17)
     single_edge_set = Set([
@@ -54,13 +45,15 @@ end
     part = LinkCutPartition(small_square_graph, cons, 4; rng=rng)
 
     for _ in 1:20
-        qg, _ = CycleWalk.build_district_quotient_graph(part)
-        qtree = CycleWalk.wilson_rst(qg, rng, weights(qg))
-        qlct = CycleWalk.build_quotient_lct(qtree; safeflag=false)
-        qpath = CycleWalk.get_cycle_path_for_edge!(qlct,
-                                                   (qtree[1].src, qtree[1].dst))
-        specified = Dict{Edge{Int}, Tuple{Int, Int}}()
-        CycleWalk.specify_quotient_path!(part, specified, qpath, rng)
+        # a quotient path of the cached marked tree between two random districts
+        tree = CycleWalk.refresh_quotient_tree!(part, rng; updown_steps=0)
+        d1, d2 = rand(rng, 1:part.num_dists, 2)
+        d1 == d2 && continue
+        districts, slots = CycleWalk.quotient_tree_path(tree, d1, d2)
+        qpath = [CycleWalk.QuotientPathVertex(d) for d in districts]
+        specified = Dict{Edge{Int}, Tuple{Int, Int}}(
+            Edge(districts[i], districts[i+1]) => tree.edges[s]
+            for (i, s) in enumerate(slots))
         linked = CycleWalk.add_specified_edges!(part, specified, qpath)
         @test length(linked) == length(qpath) - 1
         CycleWalk.cut_cross_district_edges!(part, qpath, specified)
@@ -239,7 +232,7 @@ end
     @test num_accepted > 0
 end
 
-@testset "collapsed cycle weights: subtree sums == topological_sort" begin
+@testset "collapsed cycle weights: subtree sums == topological_sort differences" begin
     cons = initialize_constraints()
     add_constraint!(cons, PopulationConstraint(small_square_graph, 2, 0.5))
     rng = PCG.PCGStateOneseq(UInt64, 5)
@@ -253,8 +246,9 @@ end
         u, v = rand(rng, nodes_d, 2)
         u == v && continue
         path = CycleWalk.get_cycle_path_for_edge!(partition, (u, v))
-        by_dict = CycleWalk.get_collapsed_cycle_weights_path(
-            path, CycleWalk.topological_sort(path[1], partition))
+        below = CycleWalk.topological_sort(path[1], partition)  # subtree weights
+        by_dict = [below[path[i].vertex] - (i < length(path) ? below[path[i+1].vertex] : 0.0)
+                   for i in eachindex(path)]
         by_sums = CycleWalk.get_collapsed_cycle_weights_path(path, partition)
         @test by_sums == by_dict
         @test sum(by_sums) == sum(partition.graph.node_attributes[w][partition.graph.pop_col]
@@ -270,15 +264,14 @@ end
     rng = PCG.PCGStateOneseq(UInt64, 3)
     partition = LinkCutPartition(small_square_graph, cons, 4; rng=rng)
     bud = CycleWalk.build_bud_walk(cons)
-    lifted = CycleWalk.build_lifted_tree_cycle_walk(cons)
-    rebuild(p) = CycleWalk.log_nspanning(CycleWalk.build_district_quotient_graph(p)[1])
+    rebuild(p) = CycleWalk.log_nspanning(rebuilt_quotient_graph(p))
 
     num_accepted = 0
     for i in 1:3000
-        walk = isodd(i ÷ 500) ? lifted : bud
-        p, update = walk(partition, rng)
+        p, update = bud(partition, rng)
         # the cache is only sometimes built/staged before an accept, so both the
-        # synced and the unsynced commit paths are exercised
+        # synced and the unsynced commit paths are exercised; BUD's internal walk
+        # supplies single-district updates and its cross moves multi-district ones
         i % 7 == 0 && @test CycleWalk.get_log_district_trees(partition) ≈ rebuild(partition)
         update === nothing && continue
         p > 0 || continue
@@ -315,6 +308,7 @@ end
             for _ in 1:300
                 p, update = bud(partition, rng)
                 update === nothing && continue
+                isempty(update.links) && continue  # partition unchanged: nothing staged
                 data = partition.energy_data[(CycleWalk.RegionalSplitData,
                                               ("county",))]
                 for d in update.changed_districts
@@ -334,4 +328,148 @@ end
         end
         @test num_checked > 300
     end
+end
+
+# Structural invariants of the cached marked tree M.
+function marked_tree_valid(partition)
+    data = partition.energy_data[CycleWalk.QuotientTreeData]
+    D = partition.num_dists
+    n2d = partition.node_to_dist
+    ok = length(data.edges) == D - 1 && length(data.slot_of) == D - 1
+    parent = collect(1:D)
+    find(x) = parent[x] == x ? x : (parent[x] = find(parent[x]))
+    for (s, (u, v)) in enumerate(data.edges)
+        a, b = n2d[u], n2d[v]
+        ok &= u < v && a != b && data.slot_of[(u, v)] == s
+        ok &= data.ends[s] == (a, b) && s in data.adj[a] && s in data.adj[b]
+        # a concrete cross edge of the partition, outside the forest
+        pair = haskey(partition.cross_district_edges, (a, b)) ? (a, b) : (b, a)
+        ok &= any(e -> CycleWalk.ordered_edge_key(e) == (u, v),
+                  partition.cross_district_edges[pair])
+        ok &= !CycleWalk.neighbors_huh(partition.lct[u], partition.lct[v])
+        ok &= data.edge_weights[s] == Float64(
+            CycleWalk.get_weight(partition.graph.simple_graph, u, v))
+        ra, rb = find(a), find(b)
+        ok &= ra != rb  # no cycle
+        parent[ra] = rb
+    end
+    ok &= length(unique(find(d) for d in 1:D)) == 1  # spanning
+    ok &= sum(length, data.adj) == 2 * (D - 1)
+    return ok
+end
+
+@testset "marked tree stays a valid spanning tree of the quotient graph" begin
+    for (wilson_prob, updown_steps) in ((0.0, 0), (0.0, 5), (0.2, 3))
+        cons = initialize_constraints()
+        add_constraint!(cons, PopulationConstraint(small_square_graph, 4, 0.5))
+        rng = PCG.PCGStateOneseq(UInt64, 11)
+        partition = LinkCutPartition(small_square_graph, cons, 4; rng=rng)
+        bud = CycleWalk.build_bud_walk(cons; wilson_prob=wilson_prob,
+                                       updown_steps=updown_steps)
+        num_accepted = 0
+        num_marked_only = 0
+        for _ in 1:3000
+            p, update = bud(partition, rng)
+            @test marked_tree_valid(partition)
+            if p > 0 && rand(rng) < min(p, 1)
+                num_marked_only += isempty(update.links)
+                CycleWalk.update_partition!(partition, update)
+                num_accepted += 1
+                data = partition.energy_data[CycleWalk.QuotientTreeData]
+                @test data.identifier == partition.identifier  # never went stale
+                @test marked_tree_valid(partition)
+            end
+        end
+        @test num_accepted > 300
+    end
+end
+
+@testset "marked tree is redrawn when the partition moved without it" begin
+    cons = initialize_constraints()
+    add_constraint!(cons, PopulationConstraint(small_square_graph, 4, 0.5))
+    rng = PCG.PCGStateOneseq(UInt64, 5)
+    partition = LinkCutPartition(small_square_graph, cons, 4; rng=rng)
+    bud = CycleWalk.build_bud_walk(cons)
+    for i in 1:2000
+        p, update = bud(partition, rng)
+        if p > 0 && rand(rng) < min(p, 1)
+            CycleWalk.update_partition!(partition, update)
+        end
+        data = partition.energy_data[CycleWalk.QuotientTreeData]
+        @test data.identifier == partition.identifier
+        if i % 50 == 0
+            # an accepted move by another proposal bumps the identifier and carries
+            # no marked change for this cache
+            partition.identifier += 1
+            for eData in values(partition.energy_data)
+                eData isa CycleWalk.QuotientTreeData || continue
+                @test eData.identifier != partition.identifier
+            end
+            bud(partition, rng)
+            @test data.identifier == partition.identifier
+            @test marked_tree_valid(partition)
+        end
+    end
+end
+
+@testset "marked tree given the forest follows w(M)/τ(Q)" begin
+    # unequal edge weights, so that w and 1/w are distinguishable
+    weighted_base = deepcopy(small_square_graph.graphs_by_level[end])
+    CycleWalk.modify_edge_weights!(weighted_base, (g, u, v) -> 1.0 + (7u + 3v) % 5)
+    weighted_graph = MultiLevelGraph(weighted_base, ["pct"])
+    cons = initialize_constraints()
+    add_constraint!(cons, PopulationConstraint(weighted_graph, 4, 0.5))
+    rng = PCG.PCGStateOneseq(UInt64, 21)
+    partition = LinkCutPartition(weighted_graph, cons, 4; rng=rng)
+    D = partition.num_dists
+    n2d = partition.node_to_dist
+
+    # every spanning tree of the cross-edge multigraph, with its weight
+    cross = [(CycleWalk.ordered_edge_key(e), Float64(CycleWalk.weight(e)))
+             for es in values(partition.cross_district_edges) for e in es]
+    exact = Dict{Set{Tuple{Int,Int}}, Float64}()
+    for combo in combinations(cross, D - 1)
+        parent = collect(1:D)
+        find(x) = parent[x] == x ? x : (parent[x] = find(parent[x]))
+        is_tree = true
+        for ((u, v), _) in combo
+            ra, rb = find(n2d[u]), find(n2d[v])
+            ra == rb && (is_tree = false; break)
+            parent[ra] = rb
+        end
+        is_tree || continue
+        exact[Set(first.(combo))] = prod(last.(combo))
+    end
+    total = sum(values(exact))
+    @test length(exact) > 10
+    @test total ≈ exp(CycleWalk.get_log_district_trees(partition))  # τ(Q)
+
+    function tv_distance(draws)
+        counts = Dict{Set{Tuple{Int,Int}}, Int}()
+        for t in draws
+            counts[t] = get(counts, t, 0) + 1
+        end
+        n = length(draws)
+        @test all(t -> haskey(exact, t), keys(counts))
+        return sum(abs(get(counts, t, 0) / n - w / total) for (t, w) in exact) / 2
+    end
+
+    data = CycleWalk.QuotientTreeData(partition)
+    # exact redraw
+    wilson_draws = Vector{Set{Tuple{Int,Int}}}()
+    for _ in 1:100_000
+        CycleWalk.rebuild_quotient_tree!(data, partition, rng)
+        push!(wilson_draws, Set(data.edges))
+    end
+    @test tv_distance(wilson_draws) < 0.03
+
+    # heat-bath chain, started from a Wilson draw
+    CycleWalk.rebuild_quotient_tree!(data, partition, rng)
+    chain_draws = Vector{Set{Tuple{Int,Int}}}()
+    for _ in 1:300_000
+        CycleWalk.quotient_updown_step!(data, partition, rng)
+        push!(chain_draws, Set(data.edges))
+    end
+    @test tv_distance(chain_draws) < 0.03
+
 end

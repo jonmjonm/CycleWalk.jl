@@ -262,6 +262,7 @@ include("./measure/energy/split_unit_count_by_node.jl")
 include("./measure/energy/performant_vra_dists.jl")
 include("./measure/energy/log_linking_edges.jl")
 include("./measure/energy/log_district_trees.jl")
+include("./measure/energy/quotient_tree_data.jl")
 # include("./measure/energy/mcd_ousted_population.jl")
 # include("./measure/energy/vap_frac.jl")
 

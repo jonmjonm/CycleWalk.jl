@@ -141,8 +141,11 @@ end
 """
     update_energy_data!(eData::LogDistrictTreesData, partition, update)
 
-Commit the accepted `update`: restage it (so the committed values always belong to
-`update`, whatever proposal was scored last) and swap the staged weights in.
+Commit the accepted `update`. An update that changes a single district (an internal
+forest move) or no cut edge at all leaves every district's label and boundary alone,
+so the weights and tree count are unchanged and only the identifier is synced.
+Otherwise restage the update (so the committed values always belong to `update`,
+whatever proposal was scored last) and swap the staged weights in.
 """
 function update_energy_data!(
     eData::LogDistrictTreesData,
@@ -151,6 +154,11 @@ function update_energy_data!(
 ) where {T<:Int}
     # unsynced before this accept (never built, or invalidated): rebuild on next use
     eData.identifier == partition.identifier - 1 || return
+    if length(update.changed_districts) == 1 ||
+       (isempty(update.links) && isempty(update.cuts))
+        eData.identifier = partition.identifier
+        return
+    end
     stage_log_district_trees!(eData, update)
     eData.weights, eData.weights_update = eData.weights_update, eData.weights
     eData.log_trees = eData.log_trees_update
