@@ -23,7 +23,7 @@ function satisfies_constraints(
 	
 	for constraint in constraints.constraints
 		if !satisfies_constraint(partition, constraint, districts;
-                                 update=update)
+                             update=update)
 			return false
 		end
 	end
