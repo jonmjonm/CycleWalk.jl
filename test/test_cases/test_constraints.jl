@@ -8,7 +8,7 @@ name = "NC graph regional constraints"
                            area_col="area",
                            node_border_col="border_length",
                            edge_perimeter_col="length")
-    graph = Graph(base_graph, ["prec_id"])
+    graph = MultiLevelGraph(base_graph, ["prec_id"])
 
     num_dists = 20
     pop_dev = 0.08
