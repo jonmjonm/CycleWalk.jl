@@ -574,17 +574,19 @@ function rotated_cut_table(
 end
 
 """
-    CycleCutData(node_pops, edge_weights, candidate_edges, k, min_pop, max_pop)
+    CycleCutData(node_pops, edge_weights, candidate_edges, districts, pop_bounds)
 
 Everything about one cycle that the cut selection needs. Cycle node `i` has
 population `node_pops[i]`; edge `i` joins nodes `i` and `i+1` (edge `m` closes
 the cycle) with weight `edge_weights[i]`.
 
 For each plausible first cut `e` in `candidate_edges` it builds the DP table of
-the path obtained by cutting at `e`, and keeps `Z[e]`, the total weight of the
-ways to place the other `k-1` cuts. Edges with `Z[e] == 0` cannot start any valid
-collection and are dropped from `feasible`. Everything here depends only on the
-cycle, so the same cut_data gives the forward and the reverse probability.
+the path obtained by cutting at `e`, and keeps `Z[e]`, the total weight (product
+of `1/w` over the cuts) of the ways to place the other `districts-1` cuts. Edges
+with `Z[e] == 0` cannot start any valid collection and are dropped from
+`feasible`. `D = Σ_feasible inv_w[e] * Z[e]` normalizes the first-edge draw.
+Everything here depends only on the cycle, so the same `CycleCutData` gives the
+forward and the reverse probability.
 """
 struct CycleCutData
     node_pops::Vector{Float64}
@@ -596,158 +598,162 @@ struct CycleCutData
     max_pop::Float64
     Z::Vector{Float64}
     feasible::Vector{Int}
-    total_inv_w::Float64
+    D::Float64
 end
 
 function CycleCutData(
     node_pops::AbstractVector{<:Real},
+    edge_weights::AbstractVector{<:Real},
+    candidate_edges::AbstractVector{Int},
     districts::Int,
-    partition::LinkCutPartition,
-    constraints::Constraints
+    pop_bounds::Tuple{Float64,Float64},
 )
-    @assert length(node_pops) >= 2 && districts >= 2
-
-    wmx = weights(partition.graph.simple_graph)
-    edge_weights = [i < m ? wmx[path[i].vertex, path[i+1].vertex] :
-                            wmx[edge[m], edge[1]] for i in 1:m]
-    min_pop = Float64(constraints.population_constraint.min_pop)
-    max_pop = Float64(constraints.population_constraint.max_pop)
-    pop_bounds = (min_pop, max_pop)
-
+    m = length(node_pops)
+    @assert m >= 2 && districts >= 2
+    pops = Float64.(node_pops)
     inv_w = [1.0 / w for w in edge_weights]
-    
-    cummulant = zeros(Float64, length(node_pops) + 1)
-    for i in 1:length(node_pops)
-        cummulant [i+1] = cummulant [i] + node_pops[i]
+
+    cummulant = zeros(Float64, m + 1)
+    for i in 1:m
+        cummulant[i+1] = cummulant[i] + pops[i]
     end
-    
-    Z = zeros(Float64, length(node_pops))
+
+    Z = zeros(Float64, m)
     feasible = Int[]
-
-    candidate_edges = find_candidate_cycle_cut_edges(node_pops, districts,
-                                                     constraints)
-
     for e in candidate_edges
-        dptable = rotated_cut_table(node_pops, inv_w, e, districts, pop_bounds)
+        dptable = rotated_cut_table(pops, inv_w, e, districts, pop_bounds)
         dptable === nothing && continue
-        Z[e] = table_weight(dptable, districts, length(node_pops))
+        Z[e] = table_weight(dptable, districts, m)
         Z[e] > 0 && push!(feasible, e)
     end
-    total_inv_w = sum(inv_w[e] for e in feasible; init=0.0)
+    D = sum(inv_w[e] * Z[e] for e in feasible; init=0.0)
 
-    return CycleCutData(pops, inv_w, cummulant, districts, length(node_pops), 
-                        min_pop, max_pop, Z, feasible, total_inv_w)
+    return CycleCutData(pops, inv_w, cummulant, districts, m, pop_bounds[1],
+                        pop_bounds[2], Z, feasible, D)
+end
+
+"""
+    CycleCutData(node_pops, districts, partition, constraints, path, edge)
+
+Build the [`CycleCutData`](@ref) of the cycle formed by the tree `path` (cycle
+node `i` is `path[i]`) and the closing non-tree `edge`. The candidate first
+edges come from [`find_candidate_cycle_cut_edges`](@ref).
+"""
+function CycleCutData(
+    node_pops::AbstractVector{<:Real},
+    districts::Int,
+    partition::LinkCutPartition,
+    constraints::Constraints,
+    path::AbstractVector{<:Node},
+    edge::Tuple{Int, Int},
+)
+    m = length(node_pops)
+    wmx = weights(partition.graph.simple_graph)
+    edge_weights = [i < m ? wmx[path[i].vertex, path[i+1].vertex] :
+                            wmx[edge[1], edge[2]] for i in 1:m]
+    pop_bounds = (Float64(constraints.population_constraint.min_pop),
+                  Float64(constraints.population_constraint.max_pop))
+    candidate_edges = find_candidate_cycle_cut_edges(node_pops, districts,
+                                                     constraints)
+    return CycleCutData(node_pops, edge_weights, candidate_edges, districts,
+                        pop_bounds)
 end
 
 """
     valid_cycle_boundaries(cut_data, boundaries)
 
-Whether `boundaries` are `k` distinct cycle edges whose `k` arcs all have
+Whether `boundaries` are `districts` distinct cycle edges whose arcs all have
 population in `[min_pop, max_pop]`.
 """
 function valid_cycle_boundaries(
     cut_data::CycleCutData,
     boundaries::AbstractVector{Int},
 )::Bool
-    @show "TO DO: valid_cycle_boundaries"
-    # k = cut_data.k
-    # length(boundaries) == k || return false
-    # Bs = sort(boundaries)
-    # (allunique(Bs) && 1 <= Bs[1] && Bs[end] <= cut_data.m) || return false
-    # S = cut_data.S
-    # for j in 1:k
-    #     a = Bs[j]
-    #     pop = j < k ? S[Bs[j+1]+1] - S[a+1] :
-    #                   S[end] - S[a+1] + S[Bs[1]+1]
-    #     cut_data.min_pop <= pop <= cut_data.max_pop || return false
-    # end
+    k = cut_data.districts
+    length(boundaries) == k || return false
+    Bs = sort(boundaries)
+    (allunique(Bs) && 1 <= Bs[1] && Bs[end] <= cut_data.path_len) || return false
+    S = cut_data.cummulant
+    for j in 1:k
+        a = Bs[j]
+        pop = j < k ? S[Bs[j+1]+1] - S[a+1] : S[end] - S[a+1] + S[Bs[1]+1]
+        cut_data.min_pop <= pop <= cut_data.max_pop || return false
+    end
     return true
 end
 
 """
-    log_prob_cut_collection(cut_data, boundaries)
+    log_prob_cut_route(cut_data, first_edge, marked_edges)
 
-Log-probability that [`select_cycle_cuts`](@ref) produces the boundary set
-`boundaries` (`-Inf` if it cannot). Any boundary `e` can be the first cut, so this
-sums over them
-`P(first = e) * P(other cuts | e)`, with `P(first = e) = (1/w_e) / Σ_feasible (1/w)`
-and `P(other cuts | e) = Π_{b != e} (1/w_b) / Z[e]`, the weight of that
-segmentation over the total weight of all completions.
+Log-probability that [`select_cycle_cuts`](@ref) draws `first_edge` as the removed
+(unmarked) edge and `marked_edges` as the other cuts (`-Inf` if that is not a
+valid collection). The first edge is drawn with probability
+`inv_w[e] * Z[e] / D` and the marked edges given `e` with probability
+`Π inv_w[b] / Z[e]`, so the route has probability `Π_{b ∈ boundaries} inv_w[b] / D`:
+`Z[e]` cancels, and `D` is the same for every route on the cycle.
 """
-function log_prob_cut_collection(
+function log_prob_cut_route(
     cut_data::CycleCutData,
-    boundaries::AbstractVector{Int},
+    first_edge::Int,
+    marked_edges::AbstractVector{Int},
 )::Float64
+    boundaries = vcat(first_edge, marked_edges)
     valid_cycle_boundaries(cut_data, boundaries) || return -Inf
-    log_inv = [log(cut_data.inv_w[b]) for b in boundaries]
-    sum_log_inv = sum(log_inv)
-    terms = Float64[]
-    for (j, e) in enumerate(boundaries)
-        cut_data.Z[e] > 0 || continue
-        # log p(e) + sum_{b != e} log(1/w_b) - log Z[e]
-        push!(terms, log_inv[j] - log(cut_data.total_inv_w) +
-                     (sum_log_inv - log_inv[j]) - log(cut_data.Z[e]))
-    end
-    isempty(terms) && return -Inf
-    top = maximum(terms)
-    return top + log(sum(exp(t - top) for t in terms))
+    cut_data.Z[first_edge] > 0 || return -Inf
+    return sum(log(cut_data.inv_w[b]) for b in boundaries) - log(cut_data.D)
 end
 
 """
-    select_cycle_cuts(cut_data, rng; forced_boundaries=nothing)
+    select_cycle_cuts(cut_data, rng)
 
-Select the `k` cut edges that split the cycle into districts. A first cut `e` is
-drawn from `cut_data.feasible` with probability proportional to `1/w_e`; the cycle
-is opened there, and the other `k-1` cuts are drawn by walking back through the
-DP table of that path with [`select_next_cut`](@ref), so that a full collection
-is drawn with probability proportional to the product of `1/w` over its cuts.
+Select the cuts that split the cycle into districts. A first edge `e` is removed,
+drawn from `cut_data.feasible` with probability `inv_w[e] * Z[e] / D`; the cycle
+is then a path, and the other `districts-1` (marked) cuts are drawn by walking
+back through its DP table with [`select_next_cut`](@ref), so a full route has
+probability `Π inv_w[b] / D` over its cuts `b`.
 
-Returns `(boundaries, log_prob)`: the sorted cut edges (cycle edge indices) and
-the log-probability of that collection, summed over every cut that could have
-been first ([`log_prob_cut_collection`](@ref)). Returns `nothing` if there is no
-valid collection.
-
-With `forced_boundaries` nothing is sampled: the given collection is scored and
-returned in the same form (`nothing` if it is not a valid collection), which
-gives the reverse probability.
+Returns `((e, marked_edges), log_prob)`: the removed edge, the sorted marked
+cycle edges, and the log-probability of that route (the same value
+[`log_prob_cut_route`](@ref) returns for it). Returns `nothing` if no valid
+collection exists.
 """
 function select_cycle_cuts(
     cut_data::CycleCutData,
-    rng::AbstractRNG
-)::Union{Nothing, Tuple{Vector{Int}, Float64}}
-    
+    rng::AbstractRNG,
+)::Union{Nothing, Tuple{Tuple{Int, Vector{Int}}, Float64}}
     isempty(cut_data.feasible) && return nothing
-    
-    r = rand(rng) * cut_data.total_inv_w
-    
-    # select an edge to remove
+
+    # select the edge to remove
+    r = rand(rng) * cut_data.D
     cum_sum = 0.0
     e = cut_data.feasible[end]
     for cand in cut_data.feasible
-        cum_sum += cut_data.inv_w[cand]
+        cum_sum += cut_data.inv_w[cand] * cut_data.Z[cand]
         if r <= cum_sum
             e = cand
             break
         end
     end
 
-    # find all possible cuts
-    dptab = rotated_cut_table(cut_data.node_pops, cut_data.inv_w, e, 
-                              cut_data.districts, (cut_data.min_pop, 
-                              cut_data.max_pop))
+    # walk back through dp table of path opened at e to pick the marked cuts
+    dptab = rotated_cut_table(cut_data.node_pops, cut_data.inv_w, e,
+                              cut_data.districts,
+                              (cut_data.min_pop, cut_data.max_pop))
     @assert dptab !== nothing
-    boundaries = Int[]
+    marked_edges = Int[]
     cur_ind = cut_data.path_len
-    log_prob = 0 
+    log_prob = log(cut_data.inv_w[e] * cut_data.Z[e]) - log(cut_data.D)
     for t in cut_data.districts:-1:1
-        step_ind, step_log_prob  = select_next_cut(dptab, cur_ind, t, rng)
+        step = select_next_cut(dptab, cur_ind, t, rng)
+        @assert step !== nothing
+        step_ind, step_log_prob = step
         log_prob += step_log_prob
-        step_ind > 0 && push!(boundaries, mod1(e + step_ind, cut_data.path_len))
+        step_ind > 0 && push!(marked_edges,
+                              mod1(e + step_ind, cut_data.path_len))
         cur_ind = step_ind
     end
-    log_prob += log(cut_data.inv_w[e])
-    sort!(boundaries)
-    return (e, boundaries), log_prob#_cut_collection(cut_data, boundaries)
+    sort!(marked_edges)
+    return (e, marked_edges), log_prob
 end
 
 """
@@ -880,33 +886,38 @@ function bud_walk!(
     cycle_weights = get_collapsed_cycle_weights_path(path, cut_remainder)
 
     cut_data = CycleCutData(cycle_weights, dists_in_cycle, partition, 
-                            constraints) # container w/ some cached-computations
-    
+                            constraints, path, edge) # cached computations
     new_edge_cuts = select_cycle_cuts(cut_data, rng)
-    if selected === nothing
+    if new_edge_cuts === nothing
         cut_cross_district_edges!(partition, quotient_path, 
                                   specified_cross_edges)
         return 0, nothing
     end
     (cut_e, new_marked_edges), log_prob_forward_mark = new_edge_cuts
 
-    # Old boundaries: the closing edge and the path edges that currently
-    # separate districts.
-    old_boundaries = [i for i in 1:(m-1) if partition.node_to_dist[path[i].vertex] !=
-                                            partition.node_to_dist[path[i+1].vertex]]
-    push!(old_boundaries, m)
-    reverse_edge_mark_prob = log_prob_cut_collection(cut_data, old_boundaries)
-    @assert reverse_selected !== nothing
-    _, log_q_reverse = reverse_selected
+    # Reverse route: the removed edge is the sampled non-tree `edge` (cycle edge
+    # m) and the marked edges are the path edges that currently separate
+    # districts.
+    m = length(path)
+    old_marked_edges = [i for i in 1:(m-1) if partition.node_to_dist[path[i].vertex] !=
+                                              partition.node_to_dist[path[i+1].vertex]]
+    log_prob_reverse_mark = log_prob_cut_route(cut_data, m, old_marked_edges)
+    if log_prob_reverse_mark == -Inf
+        cut_cross_district_edges!(partition, quotient_path, 
+                                  specified_cross_edges)
+        return 0, nothing
+    end
     
+    log_p = log_prob_reverse_mark - log_prob_forward_mark
+
     #### proposal ratio is what: I still need ratio of quotient district graphs
     log_weighted_qtree_count_old = log_nspanning(qg)
-    log_weighted_qtree_count_new = # log_nspanning(qg)
+    log_weighted_qtree_count_new, update = get_proposed_log_nspanning()
 
-    p = 
+    log_p += log_weighted_qtree_count_old - log_weighted_qtree_count_new
 
     cut_cross_district_edges!(partition, quotient_path, specified_cross_edges)
-    return 0, nothing
+    return exp(log_p), update
 end
 
 """
