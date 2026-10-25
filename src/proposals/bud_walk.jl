@@ -1043,10 +1043,13 @@ function update_log_proposal_ratio!(
     new_cross_d_edg = find_cross_district_edges_moved(partition, changed, moved)
     update = Update(changed, links, cuts, new_cross_d_edg, false)
 
-    energy_data_snapshot = deepcopy(partition.energy_data)
+    # `update.identifier` does not fix the labeling, so staged buffers from an earlier
+    # proposal must not be reused
+    for eData in values(partition.energy_data)
+        reset_update_buffer!(eData)
+    end
     constraints_ok = satisfies_constraints(partition, constraints,
                                            collect(changed); update=update)
-    partition.energy_data = energy_data_snapshot
 
     log_qtree_count_new = -Inf
     if constraints_ok

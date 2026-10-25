@@ -46,6 +46,17 @@ function RegionalSplitData(partition::LinkCutPartition, region::String)
 end
 
 """
+    reset_update_buffer!(data::RegionalSplitData)
+
+Forget which update the `_update` region maps were built for, so the next query with
+an `update` rebuilds them.
+"""
+function reset_update_buffer!(data::RegionalSplitData)
+    empty!(data.update_identifier)
+    return
+end
+
+"""
     update_regional_split_data!(data, partition, update)
 
 Recompute the `_update` region↔district maps for the proposed plan. Shallow-copies

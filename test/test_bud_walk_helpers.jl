@@ -292,3 +292,46 @@ end
     end
     @test num_accepted > 100
 end
+
+@testset "reset_update_buffer!: staged constraint data belongs to the proposal" begin
+    # CapRegionDistricts stages RegionalSplitData (keyed on update.identifier) in
+    # every BUD constraint check; the buffers are carried across proposals
+    for excess_split in (3, 1)
+        cons = initialize_constraints()
+        add_constraint!(cons, PopulationConstraint(small_square_graph, 4, 0.5))
+        add_constraint!(cons, CapRegionDistricts(small_square_graph, "county";
+                                                 excess_split=excess_split,
+                                                 num_dists=4))
+        rng = PCG.PCGStateOneseq(UInt64, 3)
+        partition = LinkCutPartition(small_square_graph, cons, 4; rng=rng)
+        bud = CycleWalk.build_bud_walk(cons)
+        node_attrs = partition.graph.node_attributes
+        county(v) = node_attrs[v]["county"]
+
+        # hold the state fixed over many proposals so that proposals with equal
+        # update.identifier (same changed districts, links and cuts) recur
+        num_checked = 0
+        for _ in 1:40
+            for _ in 1:300
+                p, update = bud(partition, rng)
+                update === nothing && continue
+                data = partition.energy_data[(CycleWalk.RegionalSplitData,
+                                              ("county",))]
+                for d in update.changed_districts
+                    want = Set(county(v) for v in eachindex(partition.node_to_dist)
+                               if partition.node_to_dist_update[v] == d)
+                    @test data.dists_to_regions_update[d] == want
+                end
+                num_checked += 1
+            end
+            for _ in 1:50
+                p, update = bud(partition, rng)
+                if p > 0 && rand(rng) < min(p, 1)
+                    CycleWalk.update_partition!(partition, update)
+                    break
+                end
+            end
+        end
+        @test num_checked > 300
+    end
+end
