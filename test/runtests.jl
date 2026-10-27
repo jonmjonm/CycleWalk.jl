@@ -22,12 +22,14 @@ function get_observed_cut_edges(
     measure::Measure=Measure();
     cycle_steps::Int=50_000,
     cycle_walk_frac::Float64 = 0.1,
-    cut_edge_field = "connections"
+    cut_edge_field = "connections",
+    walk::Symbol = :lifted
 )::Dict
     rng = PCG.PCGStateOneseq(UInt64, 1241909)
     partition = LinkCutPartition(graph, constraints, num_districts; rng=rng)
 
-    cycle_walk = build_lifted_tree_cycle_walk(constraints)
+    cycle_walk = walk == :bud ? build_bud_walk(constraints) :
+                                build_lifted_tree_cycle_walk(constraints)
     internal_walk = build_internal_forest_walk(constraints)
     proposal = [(cycle_walk_frac, cycle_walk), 
                 (1.0-cycle_walk_frac, internal_walk)]
@@ -64,7 +66,7 @@ add_constraint!(measure_constraints,
 include(joinpath(testdir, "test_linkcuttree.jl"))
 include(joinpath(testdir, "test_option_b.jl"))
 include(joinpath(testdir, "test_cuttable_edges.jl"))
-# include(joinpath(testdir, "test_bud_walk_helpers.jl"))
+include(joinpath(testdir, "test_bud_walk_helpers.jl"))
 include(joinpath(testdir, "test_annealed_importance_sampling.jl"))
 include(joinpath(testdir, "test_annealed_smc.jl"))
 include(joinpath(testdir, "test_parallel_tempering.jl"))
@@ -72,6 +74,7 @@ include(joinpath(testdir, "test_run_metadata.jl"))
 include(joinpath(testdir, "test_measure.jl"))
 include(joinpath(testdir, "test_log_forest_count.jl"))
 include(joinpath(testdir, "test_derived_columns.jl"))
+include(joinpath(testdir, "test_modify_edge_weights.jl"))
 include(joinpath(testdir, "test_config_helpers.jl"))
 include(joinpath(testdir, "test_extend.jl"))
 include(joinpath(testdir, "test_docs_coverage.jl"))
@@ -83,6 +86,7 @@ tests = [
     "small_square_p88_unweighted",
     "small_square_p88_weighted",
     "small_square_p88_polsby_popper",
+    "small_square_p88_bud_walk", # uses helpers from the weighted/polsby_popper cases
     "test_constraints",
     "test_budgeted_region_constraint",
     "test_budgeted_region_mfr_translation",

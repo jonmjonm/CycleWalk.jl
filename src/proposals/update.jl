@@ -14,6 +14,9 @@ Fields:
   district→root labeling consistent (see `find_proposal_prob_ratio!`).
 - `identifier`: a flattened key of the changed districts and edited edges, used to
   detect whether cached energy data matches this update.
+- `marked_change`: `nothing`, or `(removed, added)` for a BUD move: the cross edges
+  (ordered vertex pairs) leaving and entering the marked quotient tree. Applied to
+  [`QuotientTreeData`](@ref) when the move is accepted.
 """
 struct Update{T <: Int}
     changed_districts::Tuple{Vararg{Int64}}
@@ -22,10 +25,13 @@ struct Update{T <: Int}
     new_cross_d_edg::Dict{Tuple{T,T}, Set{SimpleWeightedEdge}}
     swap_link11::Bool
     identifier::Vector{T}
+    marked_change::Union{Nothing,
+                         Tuple{Vector{Tuple{Int,Int}}, Vector{Tuple{Int,Int}}}}
 end
 
 """
-    Update(changed_districts, links, cuts, new_cross_d_edg, swap_link11)
+    Update(changed_districts, links, cuts, new_cross_d_edg, swap_link11;
+           marked_change=nothing)
 
 Construct an [`Update`](@ref), deriving the `identifier` by concatenating the changed
 district indices with the link and cut vertex pairs.
@@ -35,7 +41,9 @@ function Update(
     links::Vector{Vector{T}},
     cuts::Vector{Vector{T}},
     new_cross_d_edg::Dict{Tuple{T,T}, Set{SimpleWeightedEdge}},
-    swap_link11::Bool
+    swap_link11::Bool;
+    marked_change::Union{Nothing,
+        Tuple{Vector{Tuple{Int,Int}}, Vector{Tuple{Int,Int}}}}=nothing
 )::Update{T} where T <: Int 
     identifier = collect(changed_districts)
     for l in links
@@ -45,5 +53,5 @@ function Update(
         append!(identifier, c)
     end
     Update{T}(changed_districts, links, cuts, new_cross_d_edg, swap_link11, 
-              identifier)
+              identifier, marked_change)
 end

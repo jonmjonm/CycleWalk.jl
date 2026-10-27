@@ -15,3 +15,22 @@ function update_energy_data!(
 	# by default, do nothing with the energy data unless the update is specified 
 	return
 end
+
+"""
+    reset_update_buffer!(eData::AbstractEnergyData)
+
+Invalidate any proposed (staged) values held by `eData` so the next query with an
+`update` recomputes them, leaving the current values untouched. Called on every cache
+before a proposal's constraints are checked, so a staged buffer left by an earlier
+proposal from the same state can never be mistaken for the new one.
+
+Default fallback: does nothing. This is correct for caches that overwrite the staged
+values of the changed districts on every `update` query (e.g.
+[`LogForestEnergyData`](@ref)). A cache that skips recomputation when the `update`
+matches the one it last staged (e.g. [`BalanceData`](@ref), keyed on
+`update.identifier`, which does not determine the labeling) must override this to
+drop that key.
+"""
+function reset_update_buffer!(eData::AbstractEnergyData)
+    return
+end

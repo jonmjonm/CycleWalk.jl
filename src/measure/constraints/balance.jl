@@ -37,6 +37,17 @@ function BalanceData(partition::LinkCutPartition)
 end
 
 """
+    reset_update_buffer!(data::BalanceData)
+
+Forget which update `dist_pops_update` was computed for, so the next query with an
+`update` recomputes it.
+"""
+function reset_update_buffer!(data::BalanceData)
+    empty!(data.update_identifier)
+    return
+end
+
+"""
     update_balance_data!(data, partition, update)
 
 Recompute `data.dist_pops_update` for the proposed plan: copy the current district
