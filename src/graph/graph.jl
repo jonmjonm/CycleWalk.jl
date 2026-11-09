@@ -174,8 +174,10 @@ function modify_edge_weights!(
     base_graph = graph.graphs_by_level[end]
     modify_edge_weights!(base_graph, edge_weight_func)
     g = MultiLevelGraph(base_graph, graph.levels)
-    for level in 1:graph.levels
+    for level in 1:length(graph.levels)
         graph.graphs_by_level[level] = g.graphs_by_level[level]
+        # the finest level has no coarse-to-fine graphs (its slot is unassigned)
+        isassigned(graph.coarse_to_fine_graphs, level) || continue
         for ii in 1:length(graph.coarse_to_fine_graphs[level])
             new_graph = g.coarse_to_fine_graphs[level][ii]
             graph.coarse_to_fine_graphs[level][ii] = new_graph

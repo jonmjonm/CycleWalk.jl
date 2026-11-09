@@ -30,6 +30,7 @@ using LinkCutTreesAugmented:
     path_children,
     first_path_child,
     next_path_sibling,
+    neighbors_huh,
     cc,
     nv_cc,
     get_connected_edge_list,
@@ -261,6 +262,7 @@ include("./measure/energy/split_unit_count_by_node.jl")
 include("./measure/energy/performant_vra_dists.jl")
 include("./measure/energy/log_linking_edges.jl")
 include("./measure/energy/log_district_trees.jl")
+include("./measure/energy/quotient_tree_data.jl")
 # include("./measure/energy/mcd_ousted_population.jl")
 # include("./measure/energy/vap_frac.jl")
 

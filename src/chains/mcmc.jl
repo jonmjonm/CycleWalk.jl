@@ -93,8 +93,9 @@ end
     update_partition!(partition, update)
 
 Apply an accepted [`Update`](@ref) to `partition` in place: perform the link/cut
-edits, recompute the two changed districts' roots (swapping their labels if
-`update.swap_link11` requires it), commit the new cross-district edges and the
+edits, recompute the roots of the changed districts (labels are read from the
+proposed assignment `node_to_dist_update`, so any number of districts is
+supported), commit the new cross-district edges and the
 node→district assignment, bump `partition.identifier`, and roll each cached energy's
 data forward via [`update_energy_data!`](@ref).
 """
@@ -111,33 +112,38 @@ function update_partition!(
         link!(partition.lct.nodes[link[1]], partition.lct.nodes[link[2]])
     end
 
-    distPair = update.changed_districts
-    new_roots = (find_root!(partition.lct.nodes[update.cuts[1][1]]),
-                 find_root!(partition.lct.nodes[update.cuts[1][2]]))
-    # swap if needed
-    l11node = partition.lct.nodes[update.links[1][1]]
-    l11dist_cur = partition.node_to_dist[update.links[1][1]]
-    r11_new = find_root!(l11node)
-    r11_root_ind_new = (r11_new != new_roots[1]) + 1
-    r11_root_ind_cur = (l11dist_cur != distPair[1]) + 1
-    if (r11_root_ind_new == r11_root_ind_cur) ⊻ !update.swap_link11
-        new_roots = (new_roots[2], new_roots[1])
+    # The proposal already labeled every changed district in node_to_dist_update
+    # (via the roots it chose), so recover each label's component from there.
+    changed = update.changed_districts
+    is_changed = falses(partition.num_dists)
+    for d in changed
+        is_changed[d] = true
+    end
+    anchors = zeros(Int, partition.num_dists)
+    remaining = length(changed)
+    node_to_dist_update = partition.node_to_dist_update
+    for v in eachindex(node_to_dist_update)
+        d = node_to_dist_update[v]
+        if is_changed[d] && anchors[d] == 0
+            anchors[d] = v
+            remaining -= 1
+            remaining == 0 && break
+        end
     end
 
-
     # modify roots
-    old_root1 = partition.district_roots[distPair[1]]
-    old_root2 = partition.district_roots[distPair[2]]
-    partition.district_roots[distPair[1]] = new_roots[1].vertex
-    partition.district_roots[distPair[2]] = new_roots[2].vertex
-    delete!(partition.roots_to_district, old_root1)
-    delete!(partition.roots_to_district, old_root2)
-    partition.roots_to_district[new_roots[1].vertex] = distPair[1]
-    partition.roots_to_district[new_roots[2].vertex] = distPair[2]
+    for d in changed
+        delete!(partition.roots_to_district, partition.district_roots[d])
+    end
+    for d in changed
+        root = find_root!(partition.lct.nodes[anchors[d]]).vertex
+        partition.district_roots[d] = root
+        partition.roots_to_district[root] = d
+    end
 
     # new_cross_d_edg 
     del_keys = [k for k in keys(partition.cross_district_edges) 
-                if (distPair[1] in k || distPair[2] in k) && 
+                if (is_changed[k[1]] || is_changed[k[2]]) && 
                     !haskey(update.new_cross_d_edg, k)]
     for dk in del_keys
         delete!(partition.cross_district_edges, dk)

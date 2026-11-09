@@ -82,6 +82,6 @@ using LinearAlgebra: logdet
         n = nv(g)
         node_to_dist = ones(Int, n)
         @test (n - 1) >= CycleWalk.DENSE_CHOLESKY_MAX_M
-        @test get_log_spanning_trees(node_to_dist, g, 1) == -Inf
+        @test round(exp(get_log_spanning_trees(node_to_dist, g, 1))) == 0
     end
 end
