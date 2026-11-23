@@ -99,9 +99,14 @@ function observed_plan_frequencies(
     graph::MultiLevelGraph,
     constraints::Constraints,
     measure::Measure;
+    # 300_000: the total-variation check below (tv < 0.035) has a fixed threshold, and TV grows as runs get
+    # shorter. At 300k records it stayed under 0.019 for every configuration and seed tried; at 150k it
+    # reached 0.029, and at 75k it exceeded 0.035.
     records::Int=300_000,
     thin::Int=4,
-    seed::Int=1241909
+    seed::Int=1241909,
+    series::Union{Nothing,Vector{Int}}=nothing,
+    plan_ids::Dict=Dict{Tuple{Vararg{Int}}, Int}()
 )
     rng = PCG.PCGStateOneseq(UInt64, seed)
     partition = LinkCutPartition(graph, constraints, 4; rng=rng)
@@ -111,13 +116,17 @@ function observed_plan_frequencies(
         run_metropolis_hastings!(partition, proposal, measure, thin, rng)
         plan = canonical_plan(partition.node_to_dist)
         counts[plan] = get(counts, plan, 0) + 1
+        series === nothing || push!(series, get!(plan_ids, plan, length(plan_ids) + 1))
     end
     return Dict(p => c / records for (p, c) in counts)
 end
 
 function test_plan_distribution(graph, constraints, measure, gamma, iso_weight, plans)
     exact = exact_plan_distribution(graph, plans, gamma, iso_weight)
-    observed = observed_plan_frequencies(graph, constraints, measure)
+    series = Int[]
+    plan_ids = Dict{Tuple{Vararg{Int}}, Int}()
+    observed = observed_plan_frequencies(graph, constraints, measure;
+                                         series=series, plan_ids=plan_ids)
 
     # no plan outside the enumerated set
     @test all(haskey(exact, p) for p in keys(observed))
@@ -135,8 +144,14 @@ function test_plan_distribution(graph, constraints, measure, gamma, iso_weight, 
         class_exact[c] = get(class_exact, c, 0.0) + pr
         class_observed[c] = get(class_observed, c, 0.0) + get(observed, p, 0.0)
     end
-    @test all(is_close(class_observed[c], class_exact[c])
-              for c in keys(class_exact) if class_exact[c] > 0.02)
+    # each heavy class's frequency, checked against its own Monte Carlo error
+    plan_of_id = Dict(id => p for (p, id) in plan_ids)
+    class_of(p) = round(exact[p], sigdigits=8)
+    heavy = Dict{Any,Float64}(c => pr for (c, pr) in class_exact if pr > 0.02)
+    light = 1.0 - sum(values(heavy))         # all other plans, pooled
+    light > 1e-9 && (heavy[:light] = light)
+    @test mc_matches(series, id -> (c = class_of(plan_of_id[id]); haskey(heavy, c) ? c : :light),
+                     heavy; label="BUD plan classes")
 end
 
 name = "small square test graph, BUD walk plan distribution, 4 districts, pop=8"
@@ -187,12 +202,12 @@ name = "small square test graph, BUD walk plan distribution, 4 districts, pop=8"
 
     # the cut-edge histograms the lifted-walk tests use, driven by the BUD walk
     @testset "cut-edge histogram, unweighted" begin
+        series = Int[]
         observed_cuts = get_observed_cut_edges(small_square_graph, constraints, 4,
-                                               cycle_steps=200_000, walk=:bud)
+                                               cycle_steps=200_000, series=series, walk=:bud)
         @test length(values(observed_cuts)) == 4
         ce_to_count = Dict(8=>256, 10=>(128+64+32), 11=>96, 12=>78)
-        steps = sum(values(observed_cuts))
-        @test all([is_close(v/steps, ce_to_count[k]/654)
-                   for (k, v) in observed_cuts])
+        @test mc_matches(series, identity, Dict(k => c/654 for (k, c) in ce_to_count);
+                         label="BUD cut-edge histogram")
     end
 end
