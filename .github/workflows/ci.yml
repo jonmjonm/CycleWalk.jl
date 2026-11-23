@@ -34,9 +34,3 @@ jobs:
 
       - name: Run tests
         run: julia --project=. -e 'import Pkg; Pkg.test()'
-      - name: Run tests
-        run: julia --project=. -e 'import Pkg; Pkg.test()'
-      - name: Run tests
-        run: julia --project=. -e 'import Pkg; Pkg.test()'
-      - name: Run tests
-        run: julia --project=. -e 'import Pkg; Pkg.test()'
