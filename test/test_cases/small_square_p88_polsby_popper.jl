@@ -115,8 +115,9 @@ name = "small square test graph (polsby-popper), 4 districts, pop=8, gamma∈{0,
     measure = Measure()
     push_energy!(measure, get_isoperimetric_score, iso_weight) 
 
+    series = Int[]
     observed_cuts = get_observed_cut_edges(modified_graph, constraints, 4,
-                                           measure, cycle_steps=100_000)
+                                           measure, cycle_steps=200_000, series=series)
 
     # check that the observed districts cut counts are correct 
     @test length(values(observed_cuts)) == 4
@@ -124,15 +125,15 @@ name = "small square test graph (polsby-popper), 4 districts, pop=8, gamma∈{0,
     # test distribution (calculated explicitly)
     ce_to_prob = get_weighted_cut_edge_dist_small_square(modified_graph, 0.0, 
                                                          iso_weight)
-    steps = sum(values(observed_cuts))
-    @test all([is_close(v/steps, ce_to_prob[k]) for (k,v) in observed_cuts])
+    @test mc_matches(series, identity, ce_to_prob; label=name)
 
     #######################################
 
     push_energy!(measure, get_log_spanning_forests, 1.0) 
 
+    series = Int[]
     observed_cuts = get_observed_cut_edges(modified_graph, constraints, 4,
-                                           measure, cycle_steps=100_000)
+                                           measure, cycle_steps=200_000, series=series)
 
     # check that the observed districts cut counts are correct 
     @test length(values(observed_cuts)) == 4
@@ -140,8 +141,7 @@ name = "small square test graph (polsby-popper), 4 districts, pop=8, gamma∈{0,
     # test distribution (calculated explicitly)
     ce_to_prob = get_weighted_cut_edge_dist_small_square(modified_graph, 1.0,
                                                          iso_weight)
-    steps = sum(values(observed_cuts))
-    @test all([is_close(v/steps, ce_to_prob[k]) for (k,v) in observed_cuts])
+    @test mc_matches(series, identity, ce_to_prob; label=name)
 
     #######################################
     # AIS sign regression with BOTH energies annealing together. The historical

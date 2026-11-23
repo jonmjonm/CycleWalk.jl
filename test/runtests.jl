@@ -15,6 +15,71 @@ function is_close(a,b)
 end
 
 
+# ---------------------------------------------------------------------------------------------------------
+# Monte Carlo checks of a chain's distribution against exact probabilities.
+#
+# A chain's observed frequencies scatter around the exact probabilities by an amount set by the chain's own
+# statistical error, which depends on the class's probability and on how correlated successive draws are.
+# A fixed relative tolerance (is_close) is either too tight for some classes, so a valid chain fails by chance
+# (and a seeded chain is not bit-identical across CI machines, so "by chance" happens), or too loose for
+# others. These checks instead measure each frequency's standard error from the run itself, by batch means:
+# split the run into consecutive batches, and use the spread of the batch frequencies. A class passes when the
+# observed frequency is within MC_Z standard errors of the exact probability (plus 1e-9 for rounding).
+# ---------------------------------------------------------------------------------------------------------
+
+"Standard errors allowed. With 50 batches, a correct chain fails one check with probability about 4e-5."
+const MC_Z = 4.5
+const MC_BATCHES = 50
+
+"""
+    mc_frequency(series, isin; nbatches=MC_BATCHES) -> (phat, se)
+
+The fraction `phat` of the draws in `series` for which `isin(draw)` holds, and its standard error `se`,
+estimated by batch means (`nbatches` consecutive, equal batches; a remainder at the end is dropped).
+"""
+function mc_frequency(series::AbstractVector, isin; nbatches::Int=MC_BATCHES)
+    b = length(series) ÷ nbatches
+    b >= 1 || throw(ArgumentError("need at least $nbatches draws, got $(length(series))"))
+    batch = [count(isin, @view series[(j - 1) * b + 1:j * b]) / b for j in 1:nbatches]
+    phat = sum(batch) / nbatches
+    se = sqrt(sum((m - phat)^2 for m in batch) / (nbatches - 1) / nbatches)
+    return phat, se
+end
+
+"""
+    mc_matches(series, classes, exact; z=MC_Z, label="") -> Bool
+
+Check a chain against an exact distribution over classes. `classes(draw)` maps a draw to its class, and
+`exact` maps each class to its exact probability. True when every draw's class is in `exact` and, for every
+class, the observed frequency is within `z` standard errors (`mc_frequency`) of the exact probability. Logs
+the classes that fail.
+"""
+function mc_matches(series::AbstractVector, classes, exact::AbstractDict; z::Real=MC_Z, label="")
+    ok = true
+    unknown = setdiff(Set(classes(d) for d in series), keys(exact))
+    if !isempty(unknown)
+        @info "Monte Carlo check: draws outside the exact distribution" label unknown
+        ok = false
+    end
+    for c in sort(collect(keys(exact)); by=string)
+        phat, se = mc_frequency(series, d -> classes(d) == c)
+        # 1e-9 absorbs rounding in the exact probabilities, e.g. a single class whose exact probability
+        # sums to 0.9999999999999989 while every draw is in it (se = 0).
+        if !(abs(phat - exact[c]) <= z * se + 1e-9)
+            @info "Monte Carlo check failed" label class=c observed=phat exact=exact[c] se zscore=(phat - exact[c]) / se
+            ok = false
+        end
+    end
+    return ok
+end
+
+"""
+    get_observed_cut_edges(graph, constraints, num_districts, measure=Measure(); cycle_steps, ...,
+                           seed=1241909, series=nothing) -> Dict
+
+Run a chain and count how often each total cut-edge weight is visited. If `series` is a vector, each step's
+cut-edge weight is also pushed onto it, in order, for `mc_matches`.
+"""
 function get_observed_cut_edges(
     graph::MultiLevelGraph, 
     constraints::Constraints,
@@ -23,9 +88,11 @@ function get_observed_cut_edges(
     cycle_steps::Int=50_000,
     cycle_walk_frac::Float64 = 0.1,
     cut_edge_field = "connections",
-    walk::Symbol = :lifted
+    walk::Symbol = :lifted,
+    seed::Integer = 1241909,
+    series::Union{Nothing,AbstractVector} = nothing
 )::Dict
-    rng = PCG.PCGStateOneseq(UInt64, 1241909)
+    rng = PCG.PCGStateOneseq(UInt64, seed)
     partition = LinkCutPartition(graph, constraints, num_districts; rng=rng)
 
     cycle_walk = walk == :bud ? build_bud_walk(constraints) :
@@ -40,6 +107,7 @@ function get_observed_cut_edges(
         run_metropolis_hastings!(partition, proposal, measure, instep, rng);
         cut_edges = get_cut_edge_sum(partition, column=cut_edge_field)
         edge_cut_counts[cut_edges] = get(edge_cut_counts, cut_edges, 0) + 1
+        series === nothing || push!(series, cut_edges)
     end
 
     return edge_cut_counts

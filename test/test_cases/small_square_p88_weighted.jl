@@ -103,8 +103,9 @@ name = "small square test graph (weighted), 4 districts, pop=8, gamma∈{0,1}"
 
     weighed_graph = weight_small_square_base_graph()
 
+    series = Int[]
     observed_cuts = get_observed_cut_edges(weighed_graph, constraints, 4,
-                                           cycle_steps=200_000,
+                                           cycle_steps=200_000, series=series,
                                            cut_edge_field="unit")
 
     # check that the observed districts cut counts are correct 
@@ -112,21 +113,16 @@ name = "small square test graph (weighted), 4 districts, pop=8, gamma∈{0,1}"
 
     # test distribution (calculated explicitly)
     ce_to_prob = get_weighted_cut_edge_dist_small_square(weighed_graph, 0.0)
-    steps = sum(values(observed_cuts))
-    passed = all([is_close(v/steps, ce_to_prob[k]) for (k,v) in observed_cuts])
-    if !passed
-        @show [v/steps for (k,v) in observed_cuts]
-        @show [ce_to_prob[k] for (k,v) in observed_cuts]
-    end
-    @test passed
+    @test mc_matches(series, identity, ce_to_prob; label=name)
 
     #######################################
 
     measure = Measure()
     push_energy!(measure, get_log_spanning_forests, 1.0) 
 
+    series = Int[]
     observed_cuts = get_observed_cut_edges(weighed_graph, constraints, 4,
-                                           measure, cycle_steps=100_000; 
+                                           measure, cycle_steps=100_000, series=series; 
                                            cut_edge_field="unit")
 
     # check that the observed districts cut counts are correct 
@@ -134,12 +130,6 @@ name = "small square test graph (weighted), 4 districts, pop=8, gamma∈{0,1}"
 
     # test distribution (calculated explicitly)
     ce_to_prob = get_weighted_cut_edge_dist_small_square(weighed_graph, 1.0)
-    steps = sum(values(observed_cuts))
-    passed = all([is_close(v/steps, ce_to_prob[k]) for (k,v) in observed_cuts])
-    if !passed
-        @show [v/steps for (k,v) in observed_cuts]
-        @show [ce_to_prob[k] for (k,v) in observed_cuts]
-    end
-    @test passed
+    @test mc_matches(series, identity, ce_to_prob; label=name)
 end
 
