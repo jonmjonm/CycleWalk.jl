@@ -145,6 +145,11 @@ function Writer(
     max_pop = constraints.population_constraint.max_pop
     atlasParam["population bounds"] = [min_pop, max_pop]
 
+    # Standard Atlas parameter naming what each level of a district key refers to
+    # (see AtlasIO's atlas_format.md). CycleWalk keys every map by a single node
+    # attribute, so each key has one level: the partition's node column.
+    atlasParam["levels in graph"] = [partition.node_col]
+
     for ii = 1:length(constraints.constraints)
         desc = constraints.descriptions[ii]
         push!(get!(atlasParam, "constraints", String[]), desc)

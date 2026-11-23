@@ -62,6 +62,8 @@
             # the writer's own header keys survive alongside the new metadata
             @test haskey(ap, "energies")
             @test ap["districts"] == num_dists
+            # the standard Atlas parameter naming the key levels: one level, the node column
+            @test ap["levels in graph"] == [p.node_col]
         end
     end
 
